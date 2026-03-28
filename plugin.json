@@ -1,0 +1,19 @@
+{
+    "id": "githubNotifier",
+    "name": "GitHub Notifier",
+    "description": "Shows open PRs authored by you and issues assigned to you from GitHub in the DankBar.",
+    "version": "0.1.0",
+    "author": "Lucas Mariani",
+    "type": "widget",
+    "capabilities": [
+        "dankbar-widget"
+    ],
+    "component": "./GitHubNotifierWidget.qml",
+    "icon": "widgets",
+    "settings": "./GitHubNotifierSettings.qml",
+    "permissions": [
+        "process",
+        "settings_read",
+        "settings_write"
+    ]
+}
