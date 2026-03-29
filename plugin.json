@@ -2,7 +2,7 @@
     "id": "githubNotifier",
     "name": "GitHub Notifier",
     "description": "Shows open PRs authored by you and issues assigned to you from GitHub in the DankBar.",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "author": "Lucas Mariani",
     "type": "widget",
     "capabilities": [

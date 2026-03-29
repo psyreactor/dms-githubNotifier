@@ -147,9 +147,6 @@ PluginComponent {
     }
 
     function fetchCounts() {
-        root.prCount = 0;
-        root.issuesCount = 0;
-
         const o = (root.org || "").trim();
 
         function prArgs() {
@@ -227,14 +224,7 @@ PluginComponent {
                 font.weight: Font.Medium
                 color: root.lastError ? Theme.error : Theme.primary
                 anchors.verticalCenter: parent.verticalCenter
-                visible: !root.loading && root.totalCount > 0
-            }
-
-            StyledText {
-                text: "…"
-                visible: root.loading
-                color: Theme.surfaceVariantText
-                anchors.verticalCenter: parent.verticalCenter
+                visible: root.totalCount > 0
             }
         }
     }
@@ -252,7 +242,7 @@ PluginComponent {
             }
 
             StyledText {
-                text: root.loading ? "…" : root.totalCount.toString()
+                text: root.totalCount.toString()
                 color: root.lastError ? Theme.error : Theme.surfaceText
                 font.pixelSize: Theme.fontSizeSmall
                 anchors.horizontalCenter: parent.horizontalCenter
