@@ -269,7 +269,8 @@ PluginComponent {
         property color accentColor: Theme.primary
 
         width: parent.width
-        height: 36
+        height: 40
+
 
         Row {
             anchors.left: parent.left
@@ -327,19 +328,13 @@ PluginComponent {
             scale: actionBtnArea.pressed ? 0.95 : (actionBtnArea.containsMouse ? 1.05 : 1.0)
             Behavior on scale { NumberAnimation { duration: 100 } }
 
-            Rectangle {
+            MouseArea {
+                id: actionBtnArea
                 anchors.fill: parent
-                radius: Theme.cornerRadius
-                color: actionBtnArea.containsMouse ? accentColor : Qt.rgba(accentColor.r, accentColor.g, accentColor.b, 0.15)
-                border.width: 1
-                border.color: Qt.rgba(accentColor.r, accentColor.g, accentColor.b, 0.4)
-                Behavior on color { ColorAnimation { duration: 150 } }
-            }
-
-            DankRipple {
-                id: actionRipple
-                rippleColor: Qt.rgba(accentColor.r, accentColor.g, accentColor.b, 0.4)
-                cornerRadius: Theme.cornerRadius
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onPressed: mouse => actionRipple.trigger(mouse.x, mouse.y)
+                onClicked: root.openUrl(openUrl)
             }
 
             Row {
@@ -348,10 +343,20 @@ PluginComponent {
                 spacing: Theme.spacingXS
 
                 DankIcon {
+                    id: actionIcon
                     name: "open_in_new"
                     size: 14
                     color: actionBtnArea.containsMouse ? "white" : accentColor
                     anchors.verticalCenter: parent.verticalCenter
+
+                    SequentialAnimation {
+                        running: actionBtnArea.containsMouse
+                        loops: Animation.Infinite
+                        onStopped: actionIcon.rotation = 0
+                        NumberAnimation { target: actionIcon; property: "rotation"; from: 0; to: 10; duration: 50; easing.type: Easing.InOutQuad }
+                        NumberAnimation { target: actionIcon; property: "rotation"; from: 10; to: -10; duration: 100; easing.type: Easing.InOutQuad }
+                        NumberAnimation { target: actionIcon; property: "rotation"; from: -10; to: 0; duration: 50; easing.type: Easing.InOutQuad }
+                    }
                 }
 
                 StyledText {
@@ -363,15 +368,16 @@ PluginComponent {
                 }
             }
 
-            MouseArea {
-                id: actionBtnArea
+            DankRipple {
+                id: actionRipple
+                rippleColor: actionBtnArea.containsMouse ? "white" : accentColor
+                cornerRadius: Theme.cornerRadius
                 anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onPressed: mouse => actionRipple.trigger(mouse.x, mouse.y)
-                onClicked: root.openUrl(openUrl)
             }
         }
+
+
+
     }
 
 
@@ -383,7 +389,8 @@ PluginComponent {
         property color accentColor: Theme.primary
 
         width: ListView.view.width
-        height: 38
+        height: 40
+
         scale: itemArea.pressed ? 0.98 : 1.0
         Behavior on scale { NumberAnimation { duration: 100 } }
 
@@ -488,22 +495,6 @@ PluginComponent {
                         scale: profileArea.pressed ? 0.9 : (profileArea.containsMouse ? 1.1 : 1.0)
                         Behavior on scale { NumberAnimation { duration: 150; easing.type: Easing.OutBack } }
 
-                        Rectangle {
-                            anchors.fill: parent
-                            radius: 20
-                            color: profileArea.containsMouse ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.3) : Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.2)
-                        }
-
-                        DankRipple { id: profileRipple; rippleColor: Theme.primary; cornerRadius: 20 }
-
-                        StyledText {
-                            text: root.faGithubGlyph
-                            font.family: root.faFamily
-                            font.pixelSize: 22
-                            color: Theme.primary
-                            anchors.centerIn: parent
-                        }
-
                         MouseArea {
                             id: profileArea
                             anchors.fill: parent
@@ -512,7 +503,33 @@ PluginComponent {
                             onPressed: mouse => profileRipple.trigger(mouse.x, mouse.y)
                             onClicked: if (root.profileUrl) root.openUrl(root.profileUrl)
                         }
+
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: 20
+                            color: profileArea.containsMouse ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.3) : Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.2)
+                        }
+
+                        StyledText {
+                            text: root.faGithubGlyph
+                            font.family: root.faFamily
+                            font.pixelSize: 22
+                            color: Theme.primary
+                            anchors.centerIn: parent
+                            scale: profileArea.containsMouse ? 1.2 : 1.0
+                            Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutBack } }
+                        }
+
+                        DankRipple { 
+                            id: profileRipple
+                            rippleColor: Theme.surfaceText
+                            cornerRadius: 20
+                            anchors.fill: parent
+                        }
                     }
+
+
+
 
 
 
@@ -545,6 +562,15 @@ PluginComponent {
                     scale: refreshArea.pressed ? 0.9 : (refreshArea.containsMouse ? 1.1 : 1.0)
                     Behavior on scale { NumberAnimation { duration: 150; easing.type: Easing.OutBack } }
 
+                    MouseArea {
+                        id: refreshArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onPressed: mouse => refreshRipple.trigger(mouse.x, mouse.y)
+                        onClicked: root.refresh()
+                    }
+
                     Rectangle {
                         anchors.fill: parent
                         radius: Theme.cornerRadius
@@ -555,15 +581,20 @@ PluginComponent {
                         Behavior on border.color { ColorAnimation { duration: 150 } }
                     }
 
-                    DankRipple { id: refreshRipple; rippleColor: Theme.primary; cornerRadius: Theme.cornerRadius }
-
                     DankIcon {
-
                         id: refreshIcon
                         name: "refresh"
                         size: 20
                         color: Theme.primary
                         anchors.centerIn: parent
+
+                        SequentialAnimation {
+                            id: hoverSpinAnim
+                            running: refreshArea.containsMouse && !root.loading
+                            onStopped: refreshIcon.rotation = 0
+                            NumberAnimation { target: refreshIcon; property: "rotation"; from: 0; to: 360; duration: 400; easing.type: Easing.InOutQuart }
+                            NumberAnimation { target: refreshIcon; property: "rotation"; from: 360; to: 0; duration: 400; easing.type: Easing.InOutQuart }
+                        }
 
                         RotationAnimation on rotation {
                             from: 0
@@ -574,16 +605,16 @@ PluginComponent {
                         }
                     }
 
-                    MouseArea {
-                        id: refreshArea
+                    DankRipple { 
+                        id: refreshRipple
+                        rippleColor: Theme.surfaceText
+                        cornerRadius: Theme.cornerRadius
                         anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onPressed: mouse => refreshRipple.trigger(mouse.x, mouse.y)
-                        onClicked: root.refresh()
                     }
-
                 }
+
+
+
 
             }
 
@@ -618,7 +649,9 @@ PluginComponent {
             StyledRect {
                 id: prContainer
                 width: parent.width
-                height: root.loading ? 46 : (root.prList.length > 0 ? Math.min(root.prList.length * 38 + 8, 200) : 46)
+                height: root.loading ? 54 : (root.prList.length > 0 ? Math.min(root.prList.length * 40 + (root.prList.length - 1) * 6 + 28, 300) : 54)
+
+
                 radius: Theme.cornerRadius * 1.5
                 color: Qt.rgba(Theme.surfaceContainer.r, Theme.surfaceContainer.g, Theme.surfaceContainer.b, 0.5)
                 border.width: 1
@@ -657,8 +690,14 @@ PluginComponent {
 
                 ListView {
                     anchors.fill: parent
-                    anchors.margins: 4
+                    anchors.topMargin: 14
+                    anchors.bottomMargin: 14
+                    anchors.leftMargin: Theme.spacingS
+                    anchors.rightMargin: Theme.spacingS
+                    spacing: 6
                     model: root.prList
+
+
                     clip: true
                     visible: !root.loading && root.prList.length > 0
                     delegate: GitHubItem {
@@ -681,7 +720,9 @@ PluginComponent {
             StyledRect {
                 id: issueContainer
                 width: parent.width
-                height: root.loading ? 46 : (root.issueList.length > 0 ? Math.min(root.issueList.length * 38 + 8, 200) : 46)
+                height: root.loading ? 54 : (root.issueList.length > 0 ? Math.min(root.issueList.length * 40 + (root.issueList.length - 1) * 6 + 28, 300) : 54)
+
+
                 radius: Theme.cornerRadius * 1.5
                 color: Qt.rgba(Theme.surfaceContainer.r, Theme.surfaceContainer.g, Theme.surfaceContainer.b, 0.5)
                 border.width: 1
@@ -720,8 +761,14 @@ PluginComponent {
 
                 ListView {
                     anchors.fill: parent
-                    anchors.margins: 4
+                    anchors.topMargin: 14
+                    anchors.bottomMargin: 14
+                    anchors.leftMargin: Theme.spacingS
+                    anchors.rightMargin: Theme.spacingS
+                    spacing: 6
                     model: root.issueList
+
+
                     clip: true
                     visible: !root.loading && root.issueList.length > 0
                     delegate: GitHubItem {
