@@ -33,6 +33,7 @@ PluginComponent {
 
     // State
     property bool loading: false
+    property bool refreshPending: false
     property string lastError: ""
     property bool ghOk: true
     property bool authOk: true
@@ -70,6 +71,15 @@ PluginComponent {
         root.lastError = msg || "";
     }
 
+    function completeRefresh() {
+        const shouldRefresh = root.refreshPending;
+        root.refreshPending = false;
+        root.loading = false;
+
+        if (shouldRefresh)
+            root.refresh();
+    }
+
     function prWebUrl() {
         return "https://github.com/pulls/authored";
     }
@@ -83,6 +93,11 @@ PluginComponent {
     }
 
     function refresh() {
+        if (root.loading) {
+            root.refreshPending = true;
+            return;
+        }
+
         root.loading = true;
         root.setError("");
         root.ghOk = true;
@@ -93,10 +108,10 @@ PluginComponent {
             if (exitCode !== 0) {
                 root.ghOk = false;
                 root.authOk = false;
-                root.loading = false;
                 root.prCount = 0;
                 root.issuesCount = 0;
                 root.setError("Could not execute gh. Is it installed and in PATH?");
+                root.completeRefresh();
                 return;
             }
 
@@ -104,10 +119,10 @@ PluginComponent {
             Proc.runCommand("githubNotifier.authStatus", [root.ghBinary, "auth", "status"], (authOut, authExit) => {
                 if (authExit !== 0) {
                     root.authOk = false;
-                    root.loading = false;
                     root.prCount = 0;
                     root.issuesCount = 0;
                     root.setError("gh is not authenticated. Run: gh auth login");
+                    root.completeRefresh();
                     return;
                 }
 
@@ -119,8 +134,8 @@ PluginComponent {
 
                 root.fetchCounts();
 
-            }, 400);
-        }, 300);
+            }, 5000);
+        }, 5000);
     }
 
     function parseGitHubList(stdout) {
@@ -153,6 +168,10 @@ PluginComponent {
     function fetchCounts() {
         const o = (root.org || "").trim();
 
+        const finish = () => {
+            root.completeRefresh();
+        };
+
         function prArgs() {
             const base = [root.ghBinary, "search", "prs", "--author=@me", "--state=open", "--json", "number,title,url,repository", "--limit", "15"];
             if (o) base.push("--owner=" + o);
@@ -177,10 +196,6 @@ PluginComponent {
             }, 5000);
         };
 
-
-        const finish = () => {
-            root.loading = false;
-        };
 
         if (root.showPRs) {
             Proc.runCommand("githubNotifier.prList", prArgs(), (stdout, exitCode) => {
@@ -631,7 +646,7 @@ PluginComponent {
                     text: root.lastError
                     wrapMode: Text.WordWrap
                     horizontalAlignment: Text.AlignHCenter
-                    color: Theme.onErrorContainer
+                    color: Theme.errorContainerText
                     font.pixelSize: Theme.fontSizeSmall
                 }
             }
