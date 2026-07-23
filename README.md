@@ -77,3 +77,4 @@ The widget parses JSON output (supports `total_count`, arrays, and NDJSON).
 - [rochacbruno](https://github.com/rochacbruno) — exclude archived repositories ([#5](https://github.com/psyreactor/dms-githubNotifier/pull/5))
 - [Thomas-Philippot](https://github.com/Thomas-Philippot) — header with user info and SVG icon ([#2](https://github.com/psyreactor/dms-githubNotifier/pull/2))
 - [bernardopg](https://github.com/bernardopg) — serialize refreshes and DMS 1.5 color fix ([#6](https://github.com/psyreactor/dms-githubNotifier/pull/6))
+- [martian0x80](https://github.com/martian0x80) — fix broken vertical bar pill ([#9](https://github.com/psyreactor/dms-githubNotifier/pull/9))
