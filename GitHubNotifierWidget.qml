@@ -272,21 +272,28 @@ PluginComponent {
     }
 
     verticalBarPill: Component {
-        Column {
-            spacing: 2
+        Item {
+            implicitWidth: col.implicitWidth
+            implicitHeight: col.implicitHeight
 
-            DankSVGIcon {
-                source: Qt.resolvedUrl("github.svg")
-                size: Theme.iconSize - 7
-                anchors.verticalCenter: parent.verticalCenter
-                colorOverride: root.lastError ? Theme.error : (root.totalCount > 0 ? Theme.primary : (Theme.widgetIconColor || Theme.surfaceText))
-            }
+            Column {
+                id: col
+                anchors.centerIn: parent
+                spacing: 2
 
-            StyledText {
-                text: root.totalCount.toString()
-                color: root.lastError ? Theme.error : Theme.surfaceText
-                font.pixelSize: Theme.fontSizeSmall
-                anchors.horizontalCenter: parent.horizontalCenter
+                DankSVGIcon {
+                    source: Qt.resolvedUrl("github.svg")
+                    size: Theme.iconSize
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    colorOverride: root.lastError ? Theme.error : (root.totalCount > 0 ? Theme.primary : (Theme.widgetIconColor || Theme.surfaceText))
+                }
+
+                StyledText {
+                    text: root.totalCount.toString()
+                    color: root.lastError ? Theme.error : Theme.surfaceText
+                    font.pixelSize: Theme.fontSizeSmall
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
             }
         }
     }
@@ -633,7 +640,7 @@ PluginComponent {
                         }
                     }
 
-                    DankRipple { 
+                    DankRipple {
                         id: refreshRipple
                         rippleColor: Theme.surfaceText
                         cornerRadius: Theme.cornerRadius
