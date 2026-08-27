@@ -1,5 +1,7 @@
 import QtQuick
-import QtQuick.Effects
+import QtQuick.Layouts
+import QtQuick.Controls
+import QtQuick.Shapes
 import Quickshell
 import qs.Common
 import qs.Services
@@ -9,77 +11,139 @@ import qs.Modules.Plugins
 PluginComponent {
     id: root
 
+    popoutWidth: 420
     layerNamespacePlugin: "github-notifier"
 
-    // Settings
-    property string ghBinary: pluginData.ghBinary || "gh"
-    property string org: pluginData.org || ""
-    property int refreshInterval: pluginData.refreshInterval || 60
-
-    function asBool(v, defaultValue) {
-        if (v === undefined || v === null)
-            return defaultValue;
-        if (typeof v === "boolean")
-            return v;
-        if (typeof v === "string")
-            return v.toLowerCase() === "true";
-        return !!v;
-    }
-
-    property bool showPRs: asBool(pluginData.showPRs, true)
-    property bool showIssues: asBool(pluginData.showIssues, true)
+    // Load settings with fallback via PluginService
+    property string ghBinary: PluginService.loadPluginData("githubNotifier", "ghBinary", "gh")
+    property string org: PluginService.loadPluginData("githubNotifier", "org", "")
+    property int refreshInterval: PluginService.loadPluginData("githubNotifier", "refreshInterval", 60)
+    property bool showPRs: PluginService.loadPluginData("githubNotifier", "showPRs", true)
+    property bool showIssues: PluginService.loadPluginData("githubNotifier", "showIssues", true)
+    property string timeFormat: PluginService.loadPluginData("githubNotifier", "timeFormat", "system")
 
     // State
-    property bool loading: false
+    // isRefreshing doubles as the serialization flag: it is true from the start
+    // of refresh() until completeRefresh(), so the spinner tracks the real work
+    // instead of a fixed timer, and overlapping refreshes coalesce.
+    property bool isRefreshing: false
     property bool refreshPending: false
     // Bumped on every refresh() so callbacks from an abandoned cycle (watchdog
     // timeout, overlapping refresh) can be discarded instead of completing it.
     property int refreshEpoch: 0
+    // Set by the manual refresh button so the toast only fires for a refresh
+    // the user actually asked for, not for every periodic tick.
+    property bool manualRefresh: false
     property string lastError: ""
-    property bool ghOk: true
-    property bool authOk: true
+    property var lastUpdated: null
 
     property int prCount: 0
     property int issuesCount: 0
     property var prList: []
     property var issueList: []
+
     property string profileUrl: ""
     property string avatarUrl: ""
     property string username: ""
 
-
     readonly property int totalCount: (showPRs ? prCount : 0) + (showIssues ? issuesCount : 0)
 
+    property string toastText: ""
+
+    // Reactivity
+    PluginGlobalVar { varName: "ghBinary"; onValueChanged: { root.ghBinary = value; root.refresh() } }
+    PluginGlobalVar { varName: "org"; onValueChanged: { root.org = value; root.refresh() } }
+    PluginGlobalVar { varName: "refreshInterval"; onValueChanged: { root.refreshInterval = value } }
+    PluginGlobalVar { varName: "showPRs"; onValueChanged: { root.showPRs = value } }
+    PluginGlobalVar { varName: "showIssues"; onValueChanged: { root.showIssues = value } }
+    PluginGlobalVar { varName: "timeFormat"; onValueChanged: { root.timeFormat = value } }
+
+    onPluginDataChanged: {
+        if (!pluginData) return;
+        root.ghBinary = PluginService.loadPluginData("githubNotifier", "ghBinary", "gh");
+        root.org = PluginService.loadPluginData("githubNotifier", "org", "");
+        root.refreshInterval = PluginService.loadPluginData("githubNotifier", "refreshInterval", 60);
+        root.showPRs = PluginService.loadPluginData("githubNotifier", "showPRs", true);
+        root.showIssues = PluginService.loadPluginData("githubNotifier", "showIssues", true);
+        root.timeFormat = PluginService.loadPluginData("githubNotifier", "timeFormat", "system");
+    }
+
+    function showToast(msg) {
+        toastText = msg;
+        toastTimer.restart();
+    }
 
     Timer {
-        interval: root.refreshInterval * 1000
+        id: toastTimer
+        interval: 1800
+    }
+
+    Timer {
+        interval: Math.max(15, root.refreshInterval) * 1000
         running: true
         repeat: true
         triggeredOnStart: true
         onTriggered: root.refresh()
     }
 
-    // If a Proc callback never fires, `loading` would latch true forever and
-    // refresh() would early-return for the rest of the session ("Checking...").
-    // 60s is above the worst legitimate case: ghVersion, authStatus and the
-    // count queries each carry a 10s Proc timeout and run back to back.
+    // If a Proc callback never fires, isRefreshing would latch true and
+    // refresh() would early-return for the rest of the session. 30s is above
+    // the worst legitimate case: ghVersion, authStatus and the count queries
+    // carry a 10s Proc timeout each and run back to back.
     Timer {
         id: loadingWatchdog
-        interval: 60000
+        interval: 30000
         repeat: false
-        running: root.loading
+        running: root.isRefreshing
         onTriggered: {
             root.refreshEpoch++;
             root.refreshPending = false;
-            root.loading = false;
-            root.setError("Timed out talking to gh. Will retry.");
+            root.manualRefresh = false;
+            root.isRefreshing = false;
+            root.lastError = "Timed out talking to gh. Will retry.";
         }
     }
 
-    onGhBinaryChanged: refresh()
-    onOrgChanged: refresh()
-    onShowPRsChanged: refresh()
-    onShowIssuesChanged: refresh()
+    function completeRefresh() {
+        const shouldRefresh = root.refreshPending;
+        const wasManual = root.manualRefresh;
+        root.refreshPending = false;
+        root.manualRefresh = false;
+        root.isRefreshing = false;
+
+        if (wasManual && !root.lastError)
+            root.showToast("Refreshed GitHub Data");
+
+        if (shouldRefresh)
+            root.refresh();
+    }
+
+    function getEffectiveTimeFormat() {
+        if (root.timeFormat === "12h") return "12h";
+        if (root.timeFormat === "24h") return "24h";
+        
+        let dmsClock24 = PluginService.loadPluginData("dankbar", "use24HourClock", undefined);
+        if (dmsClock24 === undefined) {
+            dmsClock24 = PluginService.loadPluginData("settings", "use24Hour", undefined);
+        }
+        if (dmsClock24 !== undefined) {
+            return dmsClock24 ? "24h" : "12h";
+        }
+        
+        let sysFmt = Qt.locale().timeFormat(Locale.ShortFormat);
+        let is24 = sysFmt.indexOf("H") !== -1 || sysFmt.indexOf("k") !== -1;
+        return is24 ? "24h" : "12h";
+    }
+
+    function formatHeaderTime(dateObj) {
+        if (!dateObj) return "";
+        let effFormat = getEffectiveTimeFormat();
+        if (effFormat === "24h") {
+            return Qt.formatTime(dateObj, "HH:mm");
+        } else {
+            return Qt.formatTime(dateObj, "h:mm AP");
+        }
+    }
 
     function openUrl(url) {
         if (!url) return;
@@ -87,23 +151,9 @@ PluginComponent {
         root.closePopout();
     }
 
-    function setError(msg) {
-        root.lastError = msg || "";
-    }
-
-    function completeRefresh() {
-        const shouldRefresh = root.refreshPending;
-        root.refreshPending = false;
-        root.loading = false;
-
-        if (shouldRefresh)
-            root.refresh();
-    }
-
     function prWebUrl() {
         return "https://github.com/pulls/authored";
     }
-
 
     function issuesWebUrl() {
         const o = (root.org || "").trim();
@@ -113,55 +163,39 @@ PluginComponent {
     }
 
     function refresh() {
-        if (root.loading) {
+        if (root.isRefreshing) {
             root.refreshPending = true;
             return;
         }
 
-        root.loading = true;
+        root.isRefreshing = true;
         const gen = ++root.refreshEpoch;
-        root.setError("");
-        root.ghOk = true;
-        root.authOk = true;
+        root.lastError = "";
 
-        // Proc.runCommand() is a singleton that keeps one entry per id and reads
-        // entry.callback at completion time, so two widget instances (one per
-        // bar/monitor) sharing an id clobber each other and only the last one
-        // registered ever fires. A null id makes Proc mint a private id per call
-        // and drop the entry once it completes.
-
-        // 1) Check gh is installed
         Proc.runCommand(null, [root.ghBinary, "--version"], (stdout, exitCode) => {
             if (gen !== root.refreshEpoch)
                 return;
 
             if (exitCode !== 0) {
-                root.ghOk = false;
-                root.authOk = false;
                 root.prCount = 0;
                 root.issuesCount = 0;
-                root.setError("Could not execute gh. Is it installed and in PATH?");
+                root.lastError = "Could not execute gh CLI. Is it installed and in PATH?";
                 root.completeRefresh();
                 return;
             }
 
-            // 2) Check auth
             Proc.runCommand(null, [root.ghBinary, "auth", "status"], (authOut, authExit) => {
                 if (gen !== root.refreshEpoch)
                     return;
 
                 if (authExit !== 0) {
-                    root.authOk = false;
                     root.prCount = 0;
                     root.issuesCount = 0;
-                    root.setError("gh is not authenticated. Run: gh auth login");
+                    root.lastError = "gh is not authenticated. Run: gh auth login";
                     root.completeRefresh();
                     return;
                 }
 
-                // Fire and forget: it does not touch `loading`, and the profile
-                // stays valid even if the refresh it belongs to was abandoned,
-                // so it deliberately skips the epoch check.
                 if (!root.profileUrl) {
                     Proc.runCommand(null, [root.ghBinary, "api", "user", "--jq", "{html_url,avatar_url,login}"], (pOut, pExit) => {
                         if (pExit === 0) {
@@ -176,7 +210,6 @@ PluginComponent {
                 }
 
                 root.fetchCounts(gen);
-
             }, 0, 10000);
         }, 0, 10000);
     }
@@ -194,52 +227,37 @@ PluginComponent {
         }
     }
 
-    function parseJsonArrayLen(stdout) {
-        const list = parseGitHubList(stdout);
-        if (list.length > 0) return list.length;
-
-        const raw = (stdout || "").trim();
-        if (!raw) return 0;
-
-        const num = parseInt(raw, 10);
-        if (!isNaN(num)) return num;
-
-        return 0;
-    }
-
-
     function fetchCounts(gen) {
         const o = (root.org || "").trim();
 
         function prArgs() {
-            const base = [root.ghBinary, "search", "prs", "archived:false", "--author=@me", "--state=open", "--json", "number,title,url,repository", "--limit", "15"];
+            const base = [root.ghBinary, "search", "prs", "archived:false", "--author=@me", "--state=open", "--json", "number,title,url,repository", "--limit", "25"];
             if (o) base.push("--owner=" + o);
             return base;
         }
 
         function issueArgs() {
-            const base = [root.ghBinary, "search", "issues", "archived:false", "--assignee=@me", "--state=open", "--json", "number,title,url,repository", "--limit", "15"];
+            const base = [root.ghBinary, "search", "issues", "archived:false", "--assignee=@me", "--state=open", "--json", "number,title,url,repository", "--limit", "25"];
             if (o) base.push("--owner=" + o);
             return base;
         }
 
-
-        const finish = () => {
-            root.completeRefresh();
-        };
-
-        const tasks = [];
+        let tasks = [];
         if (root.showPRs) tasks.push("pr");
         if (root.showIssues) tasks.push("issue");
 
         if (tasks.length === 0) {
-            finish();
+            root.lastUpdated = new Date();
+            root.completeRefresh();
             return;
         }
 
         let remaining = tasks.length;
         const done = () => {
-            if (--remaining === 0) finish();
+            if (--remaining === 0) {
+                root.lastUpdated = new Date();
+                root.completeRefresh();
+            }
         };
 
         if (root.showPRs) {
@@ -267,30 +285,9 @@ PluginComponent {
                 done();
             }, 0, 10000);
         }
-
     }
 
-    component Badge: StyledRect {
-        property int value: 0
-        property color badgeColor: Theme.primary
-
-        height: 18
-        width: Math.max(22, badgeText.implicitWidth + Theme.spacingS)
-        radius: 9
-        color: Qt.rgba(badgeColor.r, badgeColor.g, badgeColor.b, 0.18)
-        border.width: 1
-        border.color: Qt.rgba(badgeColor.r, badgeColor.g, badgeColor.b, 0.35)
-
-        StyledText {
-            id: badgeText
-            anchors.centerIn: parent
-            text: value.toString()
-            font.pixelSize: Theme.fontSizeSmall
-            font.weight: Font.Medium
-            color: badgeColor
-        }
-    }
-
+    // Horizontal Bar Pill
     horizontalBarPill: Component {
         Row {
             spacing: Theme.spacingXS
@@ -306,566 +303,850 @@ PluginComponent {
                 text: root.totalCount.toString()
                 font.pixelSize: Theme.fontSizeMedium
                 font.weight: Font.Medium
-                color: root.lastError ? Theme.error : Theme.primary
+                color: root.lastError ? Theme.error : Theme.surfaceText
                 anchors.verticalCenter: parent.verticalCenter
-                visible: root.totalCount > 0
             }
         }
     }
 
+    // Vertical Bar Pill
+    // A bare Column reports no implicit size here, which is what broke the
+    // vertical pill before #9. Keep the Item wrapper that fixed it.
     verticalBarPill: Component {
         Item {
-            implicitWidth: col.implicitWidth
-            implicitHeight: col.implicitHeight
+            implicitWidth: verticalCol.implicitWidth
+            implicitHeight: verticalCol.implicitHeight
 
             Column {
-                id: col
+                id: verticalCol
                 anchors.centerIn: parent
-                spacing: 2
+                spacing: Theme.spacingS
 
                 DankSVGIcon {
                     source: Qt.resolvedUrl("github.svg")
-                    size: Theme.iconSize
+                    size: root.iconSize
                     anchors.horizontalCenter: parent.horizontalCenter
                     colorOverride: root.lastError ? Theme.error : (root.totalCount > 0 ? Theme.primary : (Theme.widgetIconColor || Theme.surfaceText))
                 }
 
                 StyledText {
                     text: root.totalCount.toString()
-                    color: root.lastError ? Theme.error : Theme.surfaceText
                     font.pixelSize: Theme.fontSizeSmall
+                    color: root.lastError ? Theme.error : Theme.surfaceText
                     anchors.horizontalCenter: parent.horizontalCenter
                 }
             }
         }
     }
 
-    component StatRow: Item {
-        property string title: ""
-        property string iconName: ""
-        property int count: 0
-        property string openUrl: ""
-        property color accentColor: Theme.primary
-
-        width: parent.width
-        height: 40
-
-
-        Row {
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: Theme.spacingS
-
-            Rectangle {
-                width: 4
-                height: 22
-                radius: 2
-                color: accentColor
-                anchors.verticalCenter: parent.verticalCenter
-            }
-
-            DankIcon {
-                name: iconName
-                size: 20
-                color: accentColor
-                anchors.verticalCenter: parent.verticalCenter
-            }
-
-            StyledText {
-                text: title
-                font.pixelSize: Theme.fontSizeMedium
-                font.weight: Font.Bold
-                color: Theme.surfaceText
-                anchors.verticalCenter: parent.verticalCenter
-            }
-
-            Rectangle {
-                width: badgeText.width + 14
-                height: 20
-                radius: 10
-                color: Qt.rgba(accentColor.r, accentColor.g, accentColor.b, 0.15)
-                anchors.verticalCenter: parent.verticalCenter
-
-                StyledText {
-                    id: badgeText
-                    text: count.toString()
-                    font.pixelSize: Theme.fontSizeSmall
-                    font.weight: Font.Bold
-                    color: accentColor
-                    anchors.centerIn: parent
-                }
-            }
-        }
-
-        // Action button (View All)
-        Item {
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            width: actionBtnRow.width + Theme.spacingM * 2
-            height: 30
-            visible: openUrl.length > 0 && count > 0
-            scale: actionBtnArea.pressed ? 0.95 : (actionBtnArea.containsMouse ? 1.05 : 1.0)
-            Behavior on scale { NumberAnimation { duration: 100 } }
-
-            MouseArea {
-                id: actionBtnArea
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onPressed: mouse => actionRipple.trigger(mouse.x, mouse.y)
-                onClicked: root.openUrl(openUrl)
-            }
-
-            Row {
-                id: actionBtnRow
-                anchors.centerIn: parent
-                spacing: Theme.spacingXS
-
-                DankIcon {
-                    id: actionIcon
-                    name: "open_in_new"
-                    size: 14
-                    color: actionBtnArea.containsMouse ? "white" : accentColor
-                    anchors.verticalCenter: parent.verticalCenter
-
-                    SequentialAnimation {
-                        running: actionBtnArea.containsMouse
-                        loops: Animation.Infinite
-                        onStopped: actionIcon.rotation = 0
-                        NumberAnimation { target: actionIcon; property: "rotation"; from: 0; to: 10; duration: 50; easing.type: Easing.InOutQuad }
-                        NumberAnimation { target: actionIcon; property: "rotation"; from: 10; to: -10; duration: 100; easing.type: Easing.InOutQuad }
-                        NumberAnimation { target: actionIcon; property: "rotation"; from: -10; to: 0; duration: 50; easing.type: Easing.InOutQuad }
-                    }
-                }
-
-                StyledText {
-                    text: "View All"
-                    font.pixelSize: Theme.fontSizeSmall
-                    font.weight: Font.Medium
-                    color: actionBtnArea.containsMouse ? "white" : accentColor
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-            }
-
-            DankRipple {
-                id: actionRipple
-                rippleColor: actionBtnArea.containsMouse ? "white" : accentColor
-                cornerRadius: Theme.cornerRadius
-                anchors.fill: parent
-            }
-        }
-
-
-
-    }
-
-
-
-
-
-    component GitHubItem: Item {
-        property var itemData: null
-        property color accentColor: Theme.primary
-
-        width: ListView.view.width
-        height: 40
-
-        scale: itemArea.pressed ? 0.98 : 1.0
-        Behavior on scale { NumberAnimation { duration: 100 } }
-
-        MouseArea {
-            id: itemArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onPressed: mouse => itemRipple.trigger(mouse.x, mouse.y)
-            onClicked: root.openUrl(itemData.url)
-        }
-
-
-        Rectangle {
-            anchors.fill: parent
-            anchors.margins: 2
-            radius: Theme.cornerRadius
-            color: itemArea.containsMouse ? Qt.rgba(accentColor.r, accentColor.g, accentColor.b, 0.08) : "transparent"
-        }
-
-        DankRipple { id: itemRipple; rippleColor: accentColor; cornerRadius: Theme.cornerRadius }
-
-        Row {
-
-            anchors.left: parent.left
-            anchors.leftMargin: Theme.spacingM
-            anchors.right: parent.right
-            anchors.rightMargin: Theme.spacingM
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: Theme.spacingS
-
-            DankIcon {
-                name: "subdirectory_arrow_right"
-                size: 14
-                color: accentColor
-                opacity: 0.6
-                anchors.verticalCenter: parent.verticalCenter
-            }
-
-            Column {
-                width: parent.width - 20
-                anchors.verticalCenter: parent.verticalCenter
-
-                StyledText {
-                    width: parent.width
-                    text: itemData ? itemData.title : ""
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.surfaceText
-                    elide: Text.ElideRight
-                }
-
-                StyledText {
-                    text: itemData ? (itemData.repository.nameWithOwner || itemData.repository.name) : ""
-                    font.pixelSize: Theme.fontSizeSmall - 2
-                    color: Theme.surfaceVariantText
-                    opacity: 0.8
-                }
-            }
-        }
-    }
-
+    // Popout Content
     popoutContent: Component {
+        PopoutComponent {
+            id: popoutColumn
+            headerText: ""
+            showCloseButton: false
 
-        Column {
-            width: parent.width
-            spacing: Theme.spacingM
-            topPadding: Theme.spacingM
-            bottomPadding: Theme.spacingM
-
-            // Header card
             Item {
+                id: popoutWrapper
                 width: parent.width
-                height: 68
+                height: mainCol.implicitHeight
 
-                Rectangle {
-                    anchors.fill: parent
-                    radius: Theme.cornerRadius * 1.5
-                    gradient: Gradient {
-                        GradientStop {
-                            position: 0.0
-                            color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.15)
-                        }
-                        GradientStop {
-                            position: 1.0
-                            color: Qt.rgba(Theme.secondary.r, Theme.secondary.g, Theme.secondary.b, 0.08)
-                        }
-                    }
-                    border.width: 1
-                    border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.25)
-                }
-
-                Row {
-                    anchors.left: parent.left
-                    anchors.leftMargin: Theme.spacingM
-                    anchors.verticalCenter: parent.verticalCenter
+                Column {
+                    id: mainCol
+                    width: parent.width
                     spacing: Theme.spacingM
+                    topPadding: 0
+                    bottomPadding: 2
 
-                    Item {
-                        width: 40
-                        height: 40
-                        anchors.verticalCenter: parent.verticalCenter
+                    // Header Card
+                    StyledRect {
+                        width: parent.width
+                        height: 72
+                        radius: Theme.cornerRadius * 1.5
+                        color: Theme.withAlpha(Theme.surfaceContainerHigh, Theme.popupTransparency)
+                        border.width: 1
+                        border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.15)
 
-                        MouseArea {
-                            id: profileArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onPressed: mouse => profileRipple.trigger(mouse.x, mouse.y)
-                            onClicked: if (root.profileUrl) root.openUrl(root.profileUrl)
-                        }
+                        // Left: Logo / Profile + Title
+                        Row {
+                            anchors.left: parent.left
+                            anchors.leftMargin: Theme.spacingM
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: Theme.spacingM
 
-                        DankCircularImage {
-                            anchors.fill: parent
-                            imageSource: root.avatarUrl
-                            fallbackIcon: ""
-                            border.width: profileArea.containsMouse ? 2 : 0
-                            border.color: Theme.primary
+                            Item {
+                                width: 42
+                                height: 42
+                                anchors.verticalCenter: parent.verticalCenter
 
-                            DankSVGIcon {
-                                source: Qt.resolvedUrl("github.svg")
-                                size: 22
-                                anchors.centerIn: parent
-                                colorOverride: Theme.primary
-                                visible: parent.imageStatus !== Image.Ready
+                                MouseArea {
+                                    id: profileArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onPressed: mouse => profileRipple.trigger(mouse.x, mouse.y)
+                                    onClicked: if (root.profileUrl) root.openUrl(root.profileUrl)
+                                }
+
+                                DankCircularImage {
+                                    anchors.fill: parent
+                                    imageSource: root.avatarUrl
+                                    fallbackIcon: ""
+                                    border.width: profileArea.containsMouse ? 2 : 0
+                                    border.color: Theme.primary
+
+                                    DankSVGIcon {
+                                        source: Qt.resolvedUrl("github.svg")
+                                        size: 22
+                                        anchors.centerIn: parent
+                                        colorOverride: Theme.primary
+                                        visible: parent.imageStatus !== Image.Ready
+                                    }
+                                }
+
+                                DankRipple {
+                                    id: profileRipple
+                                    rippleColor: Theme.primary
+                                    cornerRadius: 21
+                                    anchors.fill: parent
+                                }
+                            }
+
+                            Column {
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 2
+
+                                StyledText {
+                                    text: root.username ? root.username : "GitHub Notifier"
+                                    font.bold: true
+                                    font.pixelSize: Theme.fontSizeLarge
+                                    color: Theme.surfaceText
+                                }
+
+                                StyledText {
+                                    text: root.lastUpdated ? (root.totalCount + " Active Items • Updated " + root.formatHeaderTime(root.lastUpdated)) : (root.totalCount + " Active Items")
+                                    font.pixelSize: Theme.fontSizeSmall - 1
+                                    color: Theme.primary
+                                    opacity: 0.85
+                                }
                             }
                         }
 
-                        DankRipple {
-                            id: profileRipple
-                            rippleColor: Theme.surfaceText
-                            cornerRadius: 20
-                            anchors.fill: parent
+                        // Right: Single Refresh Action Button
+                        Rectangle {
+                            id: headerRefreshBtn
+                            anchors.right: parent.right
+                            anchors.rightMargin: Theme.spacingM
+                            anchors.verticalCenter: parent.verticalCenter
+                            property bool isHovered: refreshMa.containsMouse
+
+                            width: 38
+                            height: 38
+
+                            color: isHovered ? Theme.withAlpha(Theme.primary, 0.15) : Theme.withAlpha(Theme.surfaceContainer, 0.4)
+                            border.width: 1
+                            border.color: Theme.withAlpha(Theme.primary, isHovered ? 0.3 : 0.15)
+                            radius: Theme.cornerRadius
+
+                            scale: refreshMa.pressed ? 0.92 : (isHovered ? 1.05 : 1.0)
+                            Behavior on scale { NumberAnimation { duration: 150; easing.type: Easing.OutBack } }
+
+                            DankRipple { id: refreshRip; anchors.fill: parent; cornerRadius: Theme.cornerRadius; rippleColor: Theme.primary }
+
+                            DankSpinner {
+                                size: 20
+                                color: Theme.primary
+                                anchors.centerIn: parent
+                                visible: root.isRefreshing
+                            }
+
+                            DankIcon {
+                                id: refreshBtnIcon
+                                name: "refresh"
+                                size: 20
+                                color: Theme.primary
+                                anchors.centerIn: parent
+                                visible: !root.isRefreshing
+
+                                rotation: refreshMa.containsMouse ? 180 : 0
+                                Behavior on rotation { NumberAnimation { duration: 250; easing.type: Easing.OutBack } }
+                            }
+
+                            MouseArea {
+                                id: refreshMa
+                                anchors.fill: parent
+                                hoverEnabled: !root.isRefreshing
+                                cursorShape: Qt.PointingHandCursor
+                                onPressed: (m) => refreshRip.trigger(m.x, m.y)
+                                onClicked: {
+                                    root.manualRefresh = true;
+                                    root.refresh();
+                                }
+                            }
                         }
                     }
 
-
-
-
-
-
-                    Column {
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 2
+                    // Error Message Rect
+                    StyledRect {
+                        width: parent.width
+                        visible: root.lastError.length > 0
+                        height: Math.max(0, errText.implicitHeight + Theme.spacingM * 2)
+                        radius: Theme.cornerRadius
+                        color: Qt.rgba(0.95, 0.26, 0.21, 0.12)
+                        border.width: 1
+                        border.color: Qt.rgba(0.95, 0.26, 0.21, 0.4)
 
                         StyledText {
-                            text: root.username ? root.username : "GitHub Notifier"
-                            font.bold: true
-                            font.pixelSize: Theme.fontSizeLarge
+                            id: errText
+                            anchors.fill: parent
+                            anchors.margins: Theme.spacingM
+                            verticalAlignment: Text.AlignVCenter
+                            horizontalAlignment: Text.AlignHCenter
+                            wrapMode: Text.WordWrap
+                            text: root.lastError
+                            color: "#F44336"
+                            font.pixelSize: Theme.fontSizeSmall
+                        }
+                    }
+
+                    // --- Separate Container Cards for Pull Requests ---
+                    StyledRect {
+                        id: prGroupCard
+                        width: parent.width
+                        height: Math.max(0, prGroupCol.implicitHeight + Theme.spacingM * 2)
+                        radius: Theme.cornerRadius
+                        color: Theme.withAlpha(Theme.surfaceContainerHigh, Theme.popupTransparency)
+                        border.width: 1
+                        border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.15)
+                        visible: root.showPRs
+
+                        Column {
+                            id: prGroupCol
+                            width: parent.width
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: Theme.spacingM
+                            spacing: Theme.spacingS
+
+                            // Container Section Header (Interactive link)
+                            Item {
+                                width: parent.width
+                                height: prGroupHeaderRow.implicitHeight
+
+                                RowLayout {
+                                    id: prGroupHeaderRow
+                                    anchors.fill: parent
+                                    spacing: Theme.spacingXS
+
+                                    DankIcon {
+                                        name: "merge_type"
+                                        size: 14
+                                        color: prHeaderMa.containsMouse ? Theme.primary : Theme.surfaceText
+                                        Layout.alignment: Qt.AlignVCenter
+                                        Behavior on color { ColorAnimation { duration: 150 } }
+                                    }
+
+                                    StyledText {
+                                        text: "Pull Requests"
+                                        font.pixelSize: Theme.fontSizeSmall
+                                        font.weight: Font.Bold
+                                        color: prHeaderMa.containsMouse ? Theme.primary : Theme.surfaceText
+                                        Layout.fillWidth: true
+                                        Layout.alignment: Qt.AlignVCenter
+                                        Behavior on color { ColorAnimation { duration: 150 } }
+                                    }
+
+                                    DankIcon {
+                                        name: "open_in_new"
+                                        size: 14
+                                        color: prHeaderMa.containsMouse ? Theme.primary : Theme.surfaceVariantText
+                                        opacity: prHeaderMa.containsMouse ? 0.9 : 0.4
+                                        Layout.alignment: Qt.AlignVCenter
+                                        Behavior on opacity { NumberAnimation { duration: 150 } }
+                                        Behavior on color { ColorAnimation { duration: 150 } }
+                                    }
+                                }
+
+                                MouseArea {
+                                    id: prHeaderMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: root.openUrl(root.prWebUrl())
+                                }
+                            }
+
+                            // Empty Category Container Pill
+                            StyledRect {
+                                width: parent.width
+                                height: 44
+                                radius: Theme.cornerRadius
+                                color: Qt.rgba(Theme.secondary.r, Theme.secondary.g, Theme.secondary.b, 0.05)
+                                border.width: 1
+                                border.color: Qt.rgba(Theme.secondary.r, Theme.secondary.g, Theme.secondary.b, 0.12)
+                                visible: !root.isRefreshing && root.prList.length === 0
+
+                                RowLayout {
+                                    anchors.centerIn: parent
+                                    spacing: Theme.spacingS
+
+                                    DankIcon {
+                                        name: "check_circle"
+                                        size: 18
+                                        color: Theme.surfaceVariantText
+                                        Layout.alignment: Qt.AlignVCenter
+                                    }
+
+                                    StyledText {
+                                        text: "No active pull requests"
+                                        font.pixelSize: Theme.fontSizeSmall
+                                        font.weight: Font.Medium
+                                        color: Theme.surfaceVariantText
+                                        Layout.alignment: Qt.AlignVCenter
+                                    }
+                                }
+                            }
+
+                            // Loading Category Container Pill
+                            StyledRect {
+                                width: parent.width
+                                height: 44
+                                radius: Theme.cornerRadius
+                                color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.05)
+                                border.width: 1
+                                border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.12)
+                                visible: root.isRefreshing
+
+                                RowLayout {
+                                    anchors.centerIn: parent
+                                    spacing: Theme.spacingS
+
+                                    DankSpinner {
+                                        size: 18
+                                        color: Theme.primary
+                                        Layout.alignment: Qt.AlignVCenter
+                                    }
+
+                                    StyledText {
+                                        text: "Refreshing PRs..."
+                                        font.pixelSize: Theme.fontSizeSmall
+                                        font.weight: Font.Medium
+                                        color: Theme.surfaceVariantText
+                                        Layout.alignment: Qt.AlignVCenter
+                                    }
+                                }
+                            }
+
+                            // Friend/PR list container (Scrollable if > 3 items)
+                            Item {
+                                width: parent.width
+                                height: root.prList.length > 3 ? 166 : prItemsColumn.implicitHeight
+                                visible: !root.isRefreshing && root.prList.length > 0
+
+                                ScrollView {
+                                    id: prScrollView
+                                    anchors.fill: parent
+                                    contentWidth: availableWidth
+
+                                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                                    ScrollBar.vertical: ScrollBar {
+                                        id: prScrollBar
+                                        policy: root.prList.length > 3 ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+                                        active: true
+                                        width: 6
+
+                                        contentItem: Rectangle {
+                                            implicitWidth: 6
+                                            radius: 3
+                                            color: prScrollBar.pressed 
+                                                   ? Theme.primary 
+                                                   : (prScrollBar.hovered 
+                                                      ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.7) 
+                                                      : Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.4))
+                                            Behavior on color { ColorAnimation { duration: 150 } }
+                                        }
+
+                                        background: Rectangle {
+                                            implicitWidth: 6
+                                            color: Qt.rgba(Theme.surfaceContainer.r, Theme.surfaceContainer.g, Theme.surfaceContainer.b, 0.2)
+                                            radius: 3
+                                        }
+                                    }
+
+                                    Column {
+                                        id: prItemsColumn
+                                        width: prScrollView.availableWidth
+                                        spacing: 4
+
+                                        Repeater {
+                                            model: root.prList
+
+                                            delegate: Item {
+                                                id: prDelegate
+                                                width: parent.width
+                                                height: Math.max(56, prRowLayout.implicitHeight + Theme.spacingS * 2)
+
+                                                property bool isHovered: prMa.containsMouse
+
+                                                Shape {
+                                                    id: prBg
+                                                    anchors.fill: parent
+
+                                                    property real innerRadius: 6
+                                                    property real outerRadius: Theme.cornerRadius || 12
+                                                    property bool isFirst: index === 0
+                                                    property bool isLast: index === root.prList.length - 1
+
+                                                    property real tlr: isHovered ? (height / 2) : (isFirst ? outerRadius : innerRadius)
+                                                    property real trr: isHovered ? (height / 2) : (isFirst ? outerRadius : innerRadius)
+                                                    property real blr: isHovered ? (height / 2) : (isLast ? outerRadius : innerRadius)
+                                                    property real brr: isHovered ? (height / 2) : (isLast ? outerRadius : innerRadius)
+
+                                                    property real tlrAnim: tlr; Behavior on tlrAnim { NumberAnimation { duration: 600; easing.type: Easing.OutExpo } }
+                                                    property real trrAnim: trr; Behavior on trrAnim { NumberAnimation { duration: 600; easing.type: Easing.OutExpo } }
+                                                    property real blrAnim: blr; Behavior on blrAnim { NumberAnimation { duration: 600; easing.type: Easing.OutExpo } }
+                                                    property real brrAnim: brr; Behavior on brrAnim { NumberAnimation { duration: 600; easing.type: Easing.OutExpo } }
+
+                                                    property color paintColor: isHovered
+                                                            ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.1)
+                                                            : Qt.rgba(Theme.secondary.r, Theme.secondary.g, Theme.secondary.b, 0.04)
+
+                                                    property color paintBorder: isHovered
+                                                            ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.4)
+                                                            : Qt.rgba(Theme.secondary.r, Theme.secondary.g, Theme.secondary.b, 0.15)
+
+                                                    ShapePath {
+                                                        fillColor: prBg.paintColor
+                                                        strokeColor: prBg.paintBorder
+                                                        strokeWidth: 1
+
+                                                        startX: prBg.tlrAnim + 1; startY: 1
+                                                        PathLine { x: prBg.width - prBg.trrAnim - 1; y: 1 }
+                                                        PathArc { x: prBg.width - 1; y: prBg.trrAnim + 1; radiusX: prBg.trrAnim; radiusY: prBg.trrAnim; direction: PathArc.Clockwise }
+                                                        PathLine { x: prBg.width - 1; y: prBg.height - prBg.brrAnim - 1 }
+                                                        PathArc { x: prBg.width - prBg.brrAnim - 1; y: prBg.height - 1; radiusX: prBg.brrAnim; radiusY: prBg.brrAnim; direction: PathArc.Clockwise }
+                                                        PathLine { x: prBg.blrAnim + 1; y: prBg.height - 1 }
+                                                        PathArc { x: 1; y: prBg.height - prBg.blrAnim - 1; radiusX: prBg.blrAnim; radiusY: prBg.blrAnim; direction: PathArc.Clockwise }
+                                                        PathLine { x: 1; y: prBg.tlrAnim + 1 }
+                                                        PathArc { x: prBg.tlrAnim + 1; y: 1; radiusX: prBg.tlrAnim; radiusY: prBg.tlrAnim; direction: PathArc.Clockwise }
+                                                    }
+                                                }
+
+                                                DankRipple {
+                                                    id: prRip
+                                                    anchors.fill: parent
+                                                    cornerRadius: prBg.tlrAnim
+                                                    rippleColor: Theme.primary
+                                                }
+
+                                                RowLayout {
+                                                    id: prRowLayout
+                                                    anchors.left: parent.left
+                                                    anchors.right: parent.right
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                    anchors.leftMargin: Theme.spacingM
+                                                    anchors.rightMargin: Theme.spacingM
+                                                    spacing: Theme.spacingM
+
+                                                    DankIcon {
+                                                        name: "merge_type"
+                                                        size: 18
+                                                        color: Theme.primary
+                                                        Layout.alignment: Qt.AlignVCenter
+                                                    }
+
+                                                    ColumnLayout {
+                                                        Layout.fillWidth: true
+                                                        Layout.alignment: Qt.AlignVCenter
+                                                        spacing: 2
+
+                                                        StyledText {
+                                                            text: modelData.title || ""
+                                                            font.pixelSize: Theme.fontSizeMedium
+                                                            font.weight: Font.Medium
+                                                            color: Theme.surfaceText
+                                                            Layout.fillWidth: true
+                                                            wrapMode: Text.WordWrap
+                                                            maximumLineCount: 2
+                                                            elide: Text.ElideRight
+                                                        }
+
+                                                        StyledText {
+                                                            text: (modelData.repository ? (modelData.repository.nameWithOwner || modelData.repository.name) : "") + " #" + modelData.number
+                                                            font.pixelSize: Theme.fontSizeSmall
+                                                            color: isHovered ? Theme.primary : Theme.surfaceVariantText
+                                                            Layout.fillWidth: true
+                                                            elide: Text.ElideRight
+                                                            Behavior on color { ColorAnimation { duration: 150 } }
+                                                        }
+                                                    }
+
+                                                    DankIcon {
+                                                        name: "open_in_new"
+                                                        size: 16
+                                                        color: Theme.surfaceVariantText
+                                                        opacity: isHovered ? 0.9 : 0.0
+                                                        Layout.alignment: Qt.AlignVCenter
+                                                        Behavior on opacity { NumberAnimation { duration: 150 } }
+                                                    }
+                                                }
+
+                                                MouseArea {
+                                                    id: prMa
+                                                    anchors.fill: parent
+                                                    hoverEnabled: true
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onPressed: (m) => prRip.trigger(m.x, m.y)
+                                                    onClicked: root.openUrl(modelData.url)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // --- Separate Container Cards for Issues ---
+                    StyledRect {
+                        id: issueGroupCard
+                        width: parent.width
+                        height: Math.max(0, issueGroupCol.implicitHeight + Theme.spacingM * 2)
+                        radius: Theme.cornerRadius
+                        color: Theme.withAlpha(Theme.surfaceContainerHigh, Theme.popupTransparency)
+                        border.width: 1
+                        border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.15)
+                        visible: root.showIssues
+
+                        Column {
+                            id: issueGroupCol
+                            width: parent.width
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: Theme.spacingM
+                            spacing: Theme.spacingS
+
+                            // Container Section Header (Interactive link)
+                            Item {
+                                width: parent.width
+                                height: issueGroupHeaderRow.implicitHeight
+
+                                RowLayout {
+                                    id: issueGroupHeaderRow
+                                    anchors.fill: parent
+                                    spacing: Theme.spacingXS
+
+                                    DankIcon {
+                                        name: "bug_report"
+                                        size: 14
+                                        color: issueHeaderMa.containsMouse ? Theme.primary : Theme.surfaceText
+                                        Layout.alignment: Qt.AlignVCenter
+                                        Behavior on color { ColorAnimation { duration: 150 } }
+                                    }
+
+                                    StyledText {
+                                        text: "Issues"
+                                        font.pixelSize: Theme.fontSizeSmall
+                                        font.weight: Font.Bold
+                                        color: issueHeaderMa.containsMouse ? Theme.primary : Theme.surfaceText
+                                        Layout.fillWidth: true
+                                        Layout.alignment: Qt.AlignVCenter
+                                        Behavior on color { ColorAnimation { duration: 150 } }
+                                    }
+
+                                    DankIcon {
+                                        name: "open_in_new"
+                                        size: 14
+                                        color: issueHeaderMa.containsMouse ? Theme.primary : Theme.surfaceVariantText
+                                        opacity: issueHeaderMa.containsMouse ? 0.9 : 0.4
+                                        Layout.alignment: Qt.AlignVCenter
+                                        Behavior on opacity { NumberAnimation { duration: 150 } }
+                                        Behavior on color { ColorAnimation { duration: 150 } }
+                                    }
+                                }
+
+                                MouseArea {
+                                    id: issueHeaderMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: root.openUrl(root.issuesWebUrl())
+                                }
+                            }
+
+                            // Empty Category Container Pill
+                            StyledRect {
+                                width: parent.width
+                                height: 44
+                                radius: Theme.cornerRadius
+                                color: Qt.rgba(Theme.secondary.r, Theme.secondary.g, Theme.secondary.b, 0.05)
+                                border.width: 1
+                                border.color: Qt.rgba(Theme.secondary.r, Theme.secondary.g, Theme.secondary.b, 0.12)
+                                visible: !root.isRefreshing && root.issueList.length === 0
+
+                                RowLayout {
+                                    anchors.centerIn: parent
+                                    spacing: Theme.spacingS
+
+                                    DankIcon {
+                                        name: "check_circle"
+                                        size: 18
+                                        color: Theme.surfaceVariantText
+                                        Layout.alignment: Qt.AlignVCenter
+                                    }
+
+                                    StyledText {
+                                        text: "No active issues"
+                                        font.pixelSize: Theme.fontSizeSmall
+                                        font.weight: Font.Medium
+                                        color: Theme.surfaceVariantText
+                                        Layout.alignment: Qt.AlignVCenter
+                                    }
+                                }
+                            }
+
+                            // Loading Category Container Pill
+                            StyledRect {
+                                width: parent.width
+                                height: 44
+                                radius: Theme.cornerRadius
+                                color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.05)
+                                border.width: 1
+                                border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.12)
+                                visible: root.isRefreshing
+
+                                RowLayout {
+                                    anchors.centerIn: parent
+                                    spacing: Theme.spacingS
+
+                                    DankSpinner {
+                                        size: 18
+                                        color: Theme.primary
+                                        Layout.alignment: Qt.AlignVCenter
+                                    }
+
+                                    StyledText {
+                                        text: "Refreshing Issues..."
+                                        font.pixelSize: Theme.fontSizeSmall
+                                        font.weight: Font.Medium
+                                        color: Theme.surfaceVariantText
+                                        Layout.alignment: Qt.AlignVCenter
+                                    }
+                                }
+                            }
+
+                            // Issue list container (Scrollable if > 3 items)
+                            Item {
+                                width: parent.width
+                                height: root.issueList.length > 3 ? 166 : issueItemsColumn.implicitHeight
+                                visible: !root.isRefreshing && root.issueList.length > 0
+
+                                ScrollView {
+                                    id: issueScrollView
+                                    anchors.fill: parent
+                                    contentWidth: availableWidth
+
+                                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                                    ScrollBar.vertical: ScrollBar {
+                                        id: issueScrollBar
+                                        policy: root.issueList.length > 3 ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+                                        active: true
+                                        width: 6
+
+                                        contentItem: Rectangle {
+                                            implicitWidth: 6
+                                            radius: 3
+                                            color: issueScrollBar.pressed 
+                                                   ? Theme.primary 
+                                                   : (issueScrollBar.hovered 
+                                                      ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.7) 
+                                                      : Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.4))
+                                            Behavior on color { ColorAnimation { duration: 150 } }
+                                        }
+
+                                        background: Rectangle {
+                                            implicitWidth: 6
+                                            color: Qt.rgba(Theme.surfaceContainer.r, Theme.surfaceContainer.g, Theme.surfaceContainer.b, 0.2)
+                                            radius: 3
+                                        }
+                                    }
+
+                                    Column {
+                                        id: issueItemsColumn
+                                        width: issueScrollView.availableWidth
+                                        spacing: 4
+
+                                        Repeater {
+                                            model: root.issueList
+
+                                            delegate: Item {
+                                                id: issueDelegate
+                                                width: parent.width
+                                                height: Math.max(56, issueRowLayout.implicitHeight + Theme.spacingS * 2)
+
+                                                property bool isHovered: issueMa.containsMouse
+
+                                                Shape {
+                                                    id: issueBg
+                                                    anchors.fill: parent
+
+                                                    property real innerRadius: 6
+                                                    property real outerRadius: Theme.cornerRadius || 12
+                                                    property bool isFirst: index === 0
+                                                    property bool isLast: index === root.issueList.length - 1
+
+                                                    property real tlr: isHovered ? (height / 2) : (isFirst ? outerRadius : innerRadius)
+                                                    property real trr: isHovered ? (height / 2) : (isFirst ? outerRadius : innerRadius)
+                                                    property real blr: isHovered ? (height / 2) : (isLast ? outerRadius : innerRadius)
+                                                    property real brr: isHovered ? (height / 2) : (isLast ? outerRadius : innerRadius)
+
+                                                    property real tlrAnim: tlr; Behavior on tlrAnim { NumberAnimation { duration: 600; easing.type: Easing.OutExpo } }
+                                                    property real trrAnim: trr; Behavior on trrAnim { NumberAnimation { duration: 600; easing.type: Easing.OutExpo } }
+                                                    property real blrAnim: blr; Behavior on blrAnim { NumberAnimation { duration: 600; easing.type: Easing.OutExpo } }
+                                                    property real brrAnim: brr; Behavior on brrAnim { NumberAnimation { duration: 600; easing.type: Easing.OutExpo } }
+
+                                                    property color paintColor: isHovered
+                                                            ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.1)
+                                                            : Qt.rgba(Theme.secondary.r, Theme.secondary.g, Theme.secondary.b, 0.04)
+
+                                                    property color paintBorder: isHovered
+                                                            ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.4)
+                                                            : Qt.rgba(Theme.secondary.r, Theme.secondary.g, Theme.secondary.b, 0.15)
+
+                                                    ShapePath {
+                                                        fillColor: issueBg.paintColor
+                                                        strokeColor: issueBg.paintBorder
+                                                        strokeWidth: 1
+
+                                                        startX: issueBg.tlrAnim + 1; startY: 1
+                                                        PathLine { x: issueBg.width - issueBg.trrAnim - 1; y: 1 }
+                                                        PathArc { x: issueBg.width - 1; y: issueBg.trrAnim + 1; radiusX: issueBg.trrAnim; radiusY: issueBg.trrAnim; direction: PathArc.Clockwise }
+                                                        PathLine { x: issueBg.width - 1; y: issueBg.height - issueBg.brrAnim - 1 }
+                                                        PathArc { x: issueBg.width - issueBg.brrAnim - 1; y: issueBg.height - 1; radiusX: issueBg.brrAnim; radiusY: issueBg.brrAnim; direction: PathArc.Clockwise }
+                                                        PathLine { x: issueBg.blrAnim + 1; y: issueBg.height - 1 }
+                                                        PathArc { x: 1; y: issueBg.height - issueBg.blrAnim - 1; radiusX: issueBg.blrAnim; radiusY: issueBg.blrAnim; direction: PathArc.Clockwise }
+                                                        PathLine { x: 1; y: issueBg.tlrAnim + 1 }
+                                                        PathArc { x: issueBg.tlrAnim + 1; y: 1; radiusX: issueBg.tlrAnim; radiusY: issueBg.tlrAnim; direction: PathArc.Clockwise }
+                                                    }
+                                                }
+
+                                                DankRipple {
+                                                    id: issueRip
+                                                    anchors.fill: parent
+                                                    cornerRadius: issueBg.tlrAnim
+                                                    rippleColor: Theme.primary
+                                                }
+
+                                                RowLayout {
+                                                    id: issueRowLayout
+                                                    anchors.left: parent.left
+                                                    anchors.right: parent.right
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                    anchors.leftMargin: Theme.spacingM
+                                                    anchors.rightMargin: Theme.spacingM
+                                                    spacing: Theme.spacingM
+
+                                                    DankIcon {
+                                                        name: "bug_report"
+                                                        size: 18
+                                                        color: Theme.secondary
+                                                        Layout.alignment: Qt.AlignVCenter
+                                                    }
+
+                                                    ColumnLayout {
+                                                        Layout.fillWidth: true
+                                                        Layout.alignment: Qt.AlignVCenter
+                                                        spacing: 2
+
+                                                        StyledText {
+                                                            text: modelData.title || ""
+                                                            font.pixelSize: Theme.fontSizeMedium
+                                                            font.weight: Font.Medium
+                                                            color: Theme.surfaceText
+                                                            Layout.fillWidth: true
+                                                            wrapMode: Text.WordWrap
+                                                            maximumLineCount: 2
+                                                            elide: Text.ElideRight
+                                                        }
+
+                                                        StyledText {
+                                                            text: (modelData.repository ? (modelData.repository.nameWithOwner || modelData.repository.name) : "") + " #" + modelData.number
+                                                            font.pixelSize: Theme.fontSizeSmall
+                                                            color: isHovered ? Theme.primary : Theme.surfaceVariantText
+                                                            Layout.fillWidth: true
+                                                            elide: Text.ElideRight
+                                                            Behavior on color { ColorAnimation { duration: 150 } }
+                                                        }
+                                                    }
+
+                                                    DankIcon {
+                                                        name: "open_in_new"
+                                                        size: 16
+                                                        color: Theme.surfaceVariantText
+                                                        opacity: isHovered ? 0.9 : 0.0
+                                                        Layout.alignment: Qt.AlignVCenter
+                                                        Behavior on opacity { NumberAnimation { duration: 150 } }
+                                                    }
+                                                }
+
+                                                MouseArea {
+                                                    id: issueMa
+                                                    anchors.fill: parent
+                                                    hoverEnabled: true
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onPressed: (m) => issueRip.trigger(m.x, m.y)
+                                                    onClicked: root.openUrl(modelData.url)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Dynamic Toast Notification Overlay
+                Rectangle {
+                    id: toastPill
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: Theme.spacingS
+                    height: 32
+                    width: toastLayout.implicitWidth + Theme.spacingM * 2
+                    radius: height / 2
+                    color: Qt.rgba(Theme.surfaceContainerHighest.r, Theme.surfaceContainerHighest.g, Theme.surfaceContainerHighest.b, 0.95)
+                    border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.4)
+                    border.width: 1
+                    z: 999
+                    opacity: toastTimer.running ? 1.0 : 0.0
+                    scale: toastTimer.running ? 1.0 : 0.75
+
+                    Behavior on opacity { NumberAnimation { duration: 200 } }
+                    Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutBack } }
+
+                    RowLayout {
+                        id: toastLayout
+                        anchors.centerIn: parent
+                        spacing: Theme.spacingXS
+
+                        DankIcon {
+                            name: "info"
+                            size: 16
+                            color: Theme.primary
+                        }
+
+                        StyledText {
+                            text: root.toastText
+                            font.pixelSize: Theme.fontSizeSmall
+                            font.weight: Font.Bold
                             color: Theme.surfaceText
                         }
-
-                        StyledText {
-                            text: root.org ? ("Org: " + root.org) : "All repositories"
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.surfaceVariantText
-                        }
                     }
                 }
-
-                // Translucent Refresh button
-                Item {
-                    width: 38
-                    height: 38
-                    anchors.right: parent.right
-                    anchors.rightMargin: Theme.spacingM
-                    anchors.verticalCenter: parent.verticalCenter
-                    scale: refreshArea.pressed ? 0.9 : (refreshArea.containsMouse ? 1.1 : 1.0)
-                    Behavior on scale { NumberAnimation { duration: 150; easing.type: Easing.OutBack } }
-
-                    MouseArea {
-                        id: refreshArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onPressed: mouse => refreshRipple.trigger(mouse.x, mouse.y)
-                        onClicked: root.refresh()
-                    }
-
-                    Rectangle {
-                        anchors.fill: parent
-                        radius: Theme.cornerRadius
-                        color: refreshArea.containsMouse ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.15) : Qt.rgba(Theme.surfaceContainer.r, Theme.surfaceContainer.g, Theme.surfaceContainer.b, 0.4)
-                        border.width: 1
-                        border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, refreshArea.containsMouse ? 0.3 : 0.15)
-                        Behavior on color { ColorAnimation { duration: 150 } }
-                        Behavior on border.color { ColorAnimation { duration: 150 } }
-                    }
-
-                    DankIcon {
-                        id: refreshIcon
-                        name: "refresh"
-                        size: 20
-                        color: Theme.primary
-                        anchors.centerIn: parent
-
-                        SequentialAnimation {
-                            id: hoverSpinAnim
-                            running: refreshArea.containsMouse && !root.loading
-                            onStopped: refreshIcon.rotation = 0
-                            NumberAnimation { target: refreshIcon; property: "rotation"; from: 0; to: 360; duration: 400; easing.type: Easing.InOutQuart }
-                            NumberAnimation { target: refreshIcon; property: "rotation"; from: 360; to: 0; duration: 400; easing.type: Easing.InOutQuart }
-                        }
-
-                        RotationAnimation on rotation {
-                            from: 0
-                            to: 360
-                            duration: 1000
-                            loops: Animation.Infinite
-                            running: root.loading
-                        }
-                    }
-
-                    DankRipple {
-                        id: refreshRipple
-                        rippleColor: Theme.surfaceText
-                        cornerRadius: Theme.cornerRadius
-                        anchors.fill: parent
-                    }
-                }
-
-
-
-
-            }
-
-            StyledRect {
-                width: parent.width
-                height: root.lastError ? 60 : 0
-                radius: Theme.cornerRadius
-                color: Theme.errorContainer
-                visible: root.lastError.length > 0
-
-                StyledText {
-                    anchors.centerIn: parent
-                    width: parent.width - Theme.spacingL * 2
-                    text: root.lastError
-                    wrapMode: Text.WordWrap
-                    horizontalAlignment: Text.AlignHCenter
-                    color: Theme.errorContainerText
-                    font.pixelSize: Theme.fontSizeSmall
-                }
-            }
-
-            // PRs Section
-            StatRow {
-                title: "Pull Requests"
-                iconName: "merge_type"
-                count: root.prCount
-                openUrl: root.prWebUrl()
-                accentColor: Theme.primary
-                visible: root.showPRs
-            }
-
-            StyledRect {
-                id: prContainer
-                width: parent.width
-                height: root.loading ? 54 : (root.prList.length > 0 ? Math.min(root.prList.length * 40 + (root.prList.length - 1) * 6 + 28, 300) : 54)
-
-
-                radius: Theme.cornerRadius * 1.5
-                color: Qt.rgba(Theme.surfaceContainer.r, Theme.surfaceContainer.g, Theme.surfaceContainer.b, 0.5)
-                border.width: 1
-                border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.1)
-                visible: root.showPRs
-                clip: true
-
-                Behavior on height { NumberAnimation { duration: 250; easing.type: Easing.OutCubic } }
-
-                Row {
-                    anchors.centerIn: parent
-                    spacing: Theme.spacingS
-                    visible: root.loading
-
-                    DankIcon {
-                        name: "sync"
-                        size: 16
-                        color: Theme.primary
-                        anchors.verticalCenter: parent.verticalCenter
-                        RotationAnimation on rotation {
-                            from: 0; to: 360; duration: 1000; loops: Animation.Infinite; running: parent.visible
-                        }
-                    }
-                    StyledText { text: "Checking..."; color: Theme.surfaceVariantText; font.pixelSize: Theme.fontSizeSmall; anchors.verticalCenter: parent.verticalCenter }
-                }
-
-
-                Row {
-                    anchors.centerIn: parent
-                    spacing: Theme.spacingS
-                    visible: !root.loading && root.prList.length === 0
-
-                    DankIcon { name: "check_circle"; size: 16; color: Theme.secondary; anchors.verticalCenter: parent.verticalCenter }
-                    StyledText { text: "No active pull requests"; color: Theme.surfaceVariantText; font.pixelSize: Theme.fontSizeSmall; anchors.verticalCenter: parent.verticalCenter }
-                }
-
-                ListView {
-                    anchors.fill: parent
-                    anchors.topMargin: 14
-                    anchors.bottomMargin: 14
-                    anchors.leftMargin: Theme.spacingS
-                    anchors.rightMargin: Theme.spacingS
-                    spacing: 6
-                    model: root.prList
-
-
-                    clip: true
-                    visible: !root.loading && root.prList.length > 0
-                    delegate: GitHubItem {
-                        itemData: modelData
-                        accentColor: Theme.primary
-                    }
-                }
-            }
-
-            // Issues Section
-            StatRow {
-                title: "Issues"
-                iconName: "bug_report"
-                count: root.issuesCount
-                openUrl: root.issuesWebUrl()
-                accentColor: Theme.secondary
-                visible: root.showIssues
-            }
-
-            StyledRect {
-                id: issueContainer
-                width: parent.width
-                height: root.loading ? 54 : (root.issueList.length > 0 ? Math.min(root.issueList.length * 40 + (root.issueList.length - 1) * 6 + 28, 300) : 54)
-
-
-                radius: Theme.cornerRadius * 1.5
-                color: Qt.rgba(Theme.surfaceContainer.r, Theme.surfaceContainer.g, Theme.surfaceContainer.b, 0.5)
-                border.width: 1
-                border.color: Qt.rgba(Theme.secondary.r, Theme.secondary.g, Theme.secondary.b, 0.1)
-                visible: root.showIssues
-                clip: true
-
-                Behavior on height { NumberAnimation { duration: 250; easing.type: Easing.OutCubic } }
-
-                Row {
-                    anchors.centerIn: parent
-                    spacing: Theme.spacingS
-                    visible: root.loading
-
-                    DankIcon {
-                        name: "sync"
-                        size: 16
-                        color: Theme.secondary
-                        anchors.verticalCenter: parent.verticalCenter
-                        RotationAnimation on rotation {
-                            from: 0; to: 360; duration: 1000; loops: Animation.Infinite; running: parent.visible
-                        }
-                    }
-                    StyledText { text: "Checking..."; color: Theme.surfaceVariantText; font.pixelSize: Theme.fontSizeSmall; anchors.verticalCenter: parent.verticalCenter }
-                }
-
-
-                Row {
-                    anchors.centerIn: parent
-                    spacing: Theme.spacingS
-                    visible: !root.loading && root.issueList.length === 0
-
-                    DankIcon { name: "check_circle"; size: 16; color: Theme.secondary; anchors.verticalCenter: parent.verticalCenter }
-                    StyledText { text: "No active issues"; color: Theme.surfaceVariantText; font.pixelSize: Theme.fontSizeSmall; anchors.verticalCenter: parent.verticalCenter }
-                }
-
-                ListView {
-                    anchors.fill: parent
-                    anchors.topMargin: 14
-                    anchors.bottomMargin: 14
-                    anchors.leftMargin: Theme.spacingS
-                    anchors.rightMargin: Theme.spacingS
-                    spacing: 6
-                    model: root.issueList
-
-
-                    clip: true
-                    visible: !root.loading && root.issueList.length > 0
-                    delegate: GitHubItem {
-                        itemData: modelData
-                        accentColor: Theme.secondary
-                    }
-                }
-            }
-
-
-
-
-            Item {
-                width: parent.width
-                height: Theme.spacingXS
             }
         }
     }
-
-
-    popoutWidth: 320
-    popoutHeight: 0
 }
