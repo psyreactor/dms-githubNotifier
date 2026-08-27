@@ -23,7 +23,17 @@ PluginComponent {
     property string timeFormat: PluginService.loadPluginData("githubNotifier", "timeFormat", "system")
 
     // State
+    // isRefreshing doubles as the serialization flag: it is true from the start
+    // of refresh() until completeRefresh(), so the spinner tracks the real work
+    // instead of a fixed timer, and overlapping refreshes coalesce.
     property bool isRefreshing: false
+    property bool refreshPending: false
+    // Bumped on every refresh() so callbacks from an abandoned cycle (watchdog
+    // timeout, overlapping refresh) can be discarded instead of completing it.
+    property int refreshEpoch: 0
+    // Set by the manual refresh button so the toast only fires for a refresh
+    // the user actually asked for, not for every periodic tick.
+    property bool manualRefresh: false
     property string lastError: ""
     property var lastUpdated: null
 
@@ -69,17 +79,43 @@ PluginComponent {
     }
 
     Timer {
-        id: refreshSpinTimer
-        interval: 1000
-        onTriggered: root.isRefreshing = false
-    }
-
-    Timer {
         interval: Math.max(15, root.refreshInterval) * 1000
         running: true
         repeat: true
         triggeredOnStart: true
         onTriggered: root.refresh()
+    }
+
+    // If a Proc callback never fires, isRefreshing would latch true and
+    // refresh() would early-return for the rest of the session. 30s is above
+    // the worst legitimate case: ghVersion, authStatus and the count queries
+    // carry a 10s Proc timeout each and run back to back.
+    Timer {
+        id: loadingWatchdog
+        interval: 30000
+        repeat: false
+        running: root.isRefreshing
+        onTriggered: {
+            root.refreshEpoch++;
+            root.refreshPending = false;
+            root.manualRefresh = false;
+            root.isRefreshing = false;
+            root.lastError = "Timed out talking to gh. Will retry.";
+        }
+    }
+
+    function completeRefresh() {
+        const shouldRefresh = root.refreshPending;
+        const wasManual = root.manualRefresh;
+        root.refreshPending = false;
+        root.manualRefresh = false;
+        root.isRefreshing = false;
+
+        if (wasManual && !root.lastError)
+            root.showToast("Refreshed GitHub Data");
+
+        if (shouldRefresh)
+            root.refresh();
     }
 
     function getEffectiveTimeFormat() {
@@ -127,23 +163,36 @@ PluginComponent {
     }
 
     function refresh() {
+        if (root.isRefreshing) {
+            root.refreshPending = true;
+            return;
+        }
+
         root.isRefreshing = true;
-        refreshSpinTimer.restart();
+        const gen = ++root.refreshEpoch;
         root.lastError = "";
 
         Proc.runCommand(null, [root.ghBinary, "--version"], (stdout, exitCode) => {
+            if (gen !== root.refreshEpoch)
+                return;
+
             if (exitCode !== 0) {
                 root.prCount = 0;
                 root.issuesCount = 0;
                 root.lastError = "Could not execute gh CLI. Is it installed and in PATH?";
+                root.completeRefresh();
                 return;
             }
 
             Proc.runCommand(null, [root.ghBinary, "auth", "status"], (authOut, authExit) => {
+                if (gen !== root.refreshEpoch)
+                    return;
+
                 if (authExit !== 0) {
                     root.prCount = 0;
                     root.issuesCount = 0;
                     root.lastError = "gh is not authenticated. Run: gh auth login";
+                    root.completeRefresh();
                     return;
                 }
 
@@ -160,11 +209,9 @@ PluginComponent {
                     }, 0, 10000);
                 }
 
-                root.fetchCounts();
+                root.fetchCounts(gen);
             }, 0, 10000);
         }, 0, 10000);
-
-        root.showToast("Refreshed GitHub Data");
     }
 
     function parseGitHubList(stdout) {
@@ -180,7 +227,7 @@ PluginComponent {
         }
     }
 
-    function fetchCounts() {
+    function fetchCounts(gen) {
         const o = (root.org || "").trim();
 
         function prArgs() {
@@ -201,6 +248,7 @@ PluginComponent {
 
         if (tasks.length === 0) {
             root.lastUpdated = new Date();
+            root.completeRefresh();
             return;
         }
 
@@ -208,11 +256,15 @@ PluginComponent {
         const done = () => {
             if (--remaining === 0) {
                 root.lastUpdated = new Date();
+                root.completeRefresh();
             }
         };
 
         if (root.showPRs) {
             Proc.runCommand(null, prArgs(), (stdout, exitCode) => {
+                if (gen !== root.refreshEpoch)
+                    return;
+
                 if (exitCode === 0) {
                     root.prList = parseGitHubList(stdout);
                     root.prCount = root.prList.length;
@@ -223,6 +275,9 @@ PluginComponent {
 
         if (root.showIssues) {
             Proc.runCommand(null, issueArgs(), (stdout, exitCode) => {
+                if (gen !== root.refreshEpoch)
+                    return;
+
                 if (exitCode === 0) {
                     root.issueList = parseGitHubList(stdout);
                     root.issuesCount = root.issueList.length;
@@ -255,22 +310,31 @@ PluginComponent {
     }
 
     // Vertical Bar Pill
+    // A bare Column reports no implicit size here, which is what broke the
+    // vertical pill before #9. Keep the Item wrapper that fixed it.
     verticalBarPill: Component {
-        Column {
-            spacing: Theme.spacingS
+        Item {
+            implicitWidth: verticalCol.implicitWidth
+            implicitHeight: verticalCol.implicitHeight
 
-            DankSVGIcon {
-                source: Qt.resolvedUrl("github.svg")
-                size: root.iconSize
-                anchors.horizontalCenter: parent.horizontalCenter
-                colorOverride: root.lastError ? Theme.error : (root.totalCount > 0 ? Theme.primary : (Theme.widgetIconColor || Theme.surfaceText))
-            }
+            Column {
+                id: verticalCol
+                anchors.centerIn: parent
+                spacing: Theme.spacingS
 
-            StyledText {
-                text: root.totalCount.toString()
-                font.pixelSize: Theme.fontSizeSmall
-                color: root.lastError ? Theme.error : Theme.surfaceText
-                anchors.horizontalCenter: parent.horizontalCenter
+                DankSVGIcon {
+                    source: Qt.resolvedUrl("github.svg")
+                    size: root.iconSize
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    colorOverride: root.lastError ? Theme.error : (root.totalCount > 0 ? Theme.primary : (Theme.widgetIconColor || Theme.surfaceText))
+                }
+
+                StyledText {
+                    text: root.totalCount.toString()
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: root.lastError ? Theme.error : Theme.surfaceText
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
             }
         }
     }
@@ -414,7 +478,10 @@ PluginComponent {
                                 hoverEnabled: !root.isRefreshing
                                 cursorShape: Qt.PointingHandCursor
                                 onPressed: (m) => refreshRip.trigger(m.x, m.y)
-                                onClicked: root.refresh()
+                                onClicked: {
+                                    root.manualRefresh = true;
+                                    root.refresh();
+                                }
                             }
                         }
                     }
