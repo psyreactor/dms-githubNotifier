@@ -79,3 +79,4 @@ The widget parses JSON output (supports `total_count`, arrays, and NDJSON).
 - [bernardopg](https://github.com/bernardopg) — serialize refreshes and DMS 1.5 color fix ([#6](https://github.com/psyreactor/dms-githubNotifier/pull/6))
 - [martian0x80](https://github.com/martian0x80) — fix broken vertical bar pill ([#9](https://github.com/psyreactor/dms-githubNotifier/pull/9))
 - [rdannenbring](https://github.com/rdannenbring) — fix widget hanging on "Checking..." in multi-bar setups ([#11](https://github.com/psyreactor/dms-githubNotifier/pull/11))
+- [JDKamalakar](https://github.com/JDKamalakar) — UI rework to match the official Phone Connect plugin: scrollable lists, header card, configurable time format ([#13](https://github.com/psyreactor/dms-githubNotifier/pull/13))
