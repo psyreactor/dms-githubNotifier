@@ -7,9 +7,15 @@ Shows a compact badge in the DankBar with counts for open Pull Requests authored
 ## Features
 
 - Badge in the bar showing the total count (PRs + issues)
-- Popup with separate counts and "open in browser" links
+- Popup header card with your avatar, username, active item count and the time
+  of the last refresh
+- One card per category listing the actual pull requests and issues — title and
+  `repo #number` — each opening in the browser on click
+- Lists scroll, with their own scrollbar, past three items
+- Manual refresh with a spinner that tracks the real `gh` calls, and a toast when
+  it completes
 - Optional filter by GitHub organization
-- Configurable refresh interval and what to count (PRs/issues)
+- Configurable refresh interval, time format, and what to count (PRs/issues)
 
 ## Installation
 
@@ -32,9 +38,12 @@ Then enable the plugin via DMS Settings → Plugins and add the `githubNotifier`
 
 - `Organization`: optional. Filters PRs and issues to the specified GitHub organization.
 - `ghBinary`: binary name/path (default: `gh`).
-- `refreshInterval`: seconds between automatic refreshes.
-- `Count Pull Requests`: toggle to include/exclude open PRs authored by you.
-- `Count Issues`: toggle to include/exclude open issues assigned to you.
+- `refreshInterval`: seconds between automatic refreshes. Values below 15 are
+  clamped to 15.
+- `Show Pull Requests`: toggle to include/exclude open PRs authored by you.
+- `Show Issues`: toggle to include/exclude open issues assigned to you.
+- `Time Format`: how the last-updated time is rendered in the popup header —
+  system default, 12-hour or 24-hour.
 
 ## Files
 
@@ -57,14 +66,21 @@ This plugin requests:
 
 ## How it works
 
-The plugin executes `gh` commands to obtain counts:
+The plugin executes `gh` commands, in this order:
 
-- Check `gh` binary: `gh --version`
+- Check the `gh` binary: `gh --version`
 - Check authentication: `gh auth status`
-- PRs count: `gh search prs --author=@me --state=open [--owner=<org>] --json number`
-- Issues count: `gh search issues --assignee=@me --state=open [--owner=<org>] --json number`
+- Fetch your profile once, for the popup header:
+  `gh api user --jq '{html_url,avatar_url,login}'`
+- Pull requests: `gh search prs archived:false --author=@me --state=open [--owner=<org>] --json number,title,url,repository --limit 25`
+- Issues: `gh search issues archived:false --assignee=@me --state=open [--owner=<org>] --json number,title,url,repository --limit 25`
 
-The widget parses JSON output (supports `total_count`, arrays, and NDJSON).
+Archived repositories are excluded, and each list is capped at 25 items. The
+widget parses the JSON as an array, or as an object with an `items` array.
+
+Refreshes are serialised: while one is in flight another is queued rather than
+run in parallel, and a watchdog clears the in-flight state if a command never
+returns.
 
 ## Troubleshooting
 
