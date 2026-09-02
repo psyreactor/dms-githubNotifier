@@ -173,7 +173,7 @@ PluginComponent {
         root.lastError = "";
 
         Proc.runCommand(null, [root.ghBinary, "--version"], (stdout, exitCode) => {
-            if (gen !== root.refreshEpoch)
+            if (!root || gen !== root.refreshEpoch)
                 return;
 
             if (exitCode !== 0) {
@@ -185,7 +185,7 @@ PluginComponent {
             }
 
             Proc.runCommand(null, [root.ghBinary, "auth", "status"], (authOut, authExit) => {
-                if (gen !== root.refreshEpoch)
+                if (!root || gen !== root.refreshEpoch)
                     return;
 
                 if (authExit !== 0) {
@@ -198,6 +198,9 @@ PluginComponent {
 
                 if (!root.profileUrl) {
                     Proc.runCommand(null, [root.ghBinary, "api", "user", "--jq", "{html_url,avatar_url,login}"], (pOut, pExit) => {
+                        if (!root)
+                            return;
+
                         if (pExit === 0) {
                             try {
                                 const u = JSON.parse(pOut.trim());
@@ -262,7 +265,7 @@ PluginComponent {
 
         if (root.showPRs) {
             Proc.runCommand(null, prArgs(), (stdout, exitCode) => {
-                if (gen !== root.refreshEpoch)
+                if (!root || gen !== root.refreshEpoch)
                     return;
 
                 if (exitCode === 0) {
@@ -275,7 +278,7 @@ PluginComponent {
 
         if (root.showIssues) {
             Proc.runCommand(null, issueArgs(), (stdout, exitCode) => {
-                if (gen !== root.refreshEpoch)
+                if (!root || gen !== root.refreshEpoch)
                     return;
 
                 if (exitCode === 0) {
