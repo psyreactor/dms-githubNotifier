@@ -7,6 +7,7 @@ import qs.Common
 import qs.Services
 import qs.Widgets
 import qs.Modules.Plugins
+import "./translations.js" as L
 
 PluginComponent {
     id: root
@@ -21,6 +22,12 @@ PluginComponent {
     property bool showPRs: PluginService.loadPluginData("githubNotifier", "showPRs", true)
     property bool showIssues: PluginService.loadPluginData("githubNotifier", "showIssues", true)
     property string timeFormat: PluginService.loadPluginData("githubNotifier", "timeFormat", "system")
+    property string language: PluginService.loadPluginData("githubNotifier", "language", "auto")
+    readonly property string lang: L.resolve(language, I18n._rawLocale || Qt.locale().name)
+
+    function tr(key, a, b) {
+        return L.tr(root.lang, key, a, b);
+    }
 
     // State
     // isRefreshing doubles as the serialization flag: it is true from the start
@@ -57,6 +64,7 @@ PluginComponent {
     PluginGlobalVar { varName: "showPRs"; onValueChanged: { root.showPRs = value } }
     PluginGlobalVar { varName: "showIssues"; onValueChanged: { root.showIssues = value } }
     PluginGlobalVar { varName: "timeFormat"; onValueChanged: { root.timeFormat = value } }
+    PluginGlobalVar { varName: "language"; onValueChanged: { root.language = value } }
 
     onPluginDataChanged: {
         if (!pluginData) return;
@@ -66,6 +74,7 @@ PluginComponent {
         root.showPRs = PluginService.loadPluginData("githubNotifier", "showPRs", true);
         root.showIssues = PluginService.loadPluginData("githubNotifier", "showIssues", true);
         root.timeFormat = PluginService.loadPluginData("githubNotifier", "timeFormat", "system");
+        root.language = PluginService.loadPluginData("githubNotifier", "language", "auto");
     }
 
     function showToast(msg) {
@@ -100,7 +109,7 @@ PluginComponent {
             root.refreshPending = false;
             root.manualRefresh = false;
             root.isRefreshing = false;
-            root.lastError = "Timed out talking to gh. Will retry.";
+            root.lastError = root.tr("errTimeout");
         }
     }
 
@@ -112,7 +121,7 @@ PluginComponent {
         root.isRefreshing = false;
 
         if (wasManual && !root.lastError)
-            root.showToast("Refreshed GitHub Data");
+            root.showToast(root.tr("refreshed"));
 
         if (shouldRefresh)
             root.refresh();
@@ -179,7 +188,7 @@ PluginComponent {
             if (exitCode !== 0) {
                 root.prCount = 0;
                 root.issuesCount = 0;
-                root.lastError = "Could not execute gh CLI. Is it installed and in PATH?";
+                root.lastError = root.tr("errGh");
                 root.completeRefresh();
                 return;
             }
@@ -191,7 +200,7 @@ PluginComponent {
                 if (authExit !== 0) {
                     root.prCount = 0;
                     root.issuesCount = 0;
-                    root.lastError = "gh is not authenticated. Run: gh auth login";
+                    root.lastError = root.tr("errAuth");
                     root.completeRefresh();
                     return;
                 }
@@ -427,7 +436,8 @@ PluginComponent {
                                 }
 
                                 StyledText {
-                                    text: root.lastUpdated ? (root.totalCount + " Active Items • Updated " + root.formatHeaderTime(root.lastUpdated)) : (root.totalCount + " Active Items")
+                                    readonly property string countText: root.tr(root.totalCount === 1 ? "itemsOne" : "items", root.totalCount)
+                                    text: root.lastUpdated ? root.tr("updatedAt", countText, root.formatHeaderTime(root.lastUpdated)) : countText
                                     font.pixelSize: Theme.fontSizeSmall - 1
                                     color: Theme.primary
                                     opacity: 0.85
@@ -551,7 +561,7 @@ PluginComponent {
                                     }
 
                                     StyledText {
-                                        text: "Pull Requests"
+                                        text: root.tr("pullRequests")
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.weight: Font.Bold
                                         color: prHeaderMa.containsMouse ? Theme.primary : Theme.surfaceText
@@ -602,7 +612,7 @@ PluginComponent {
                                     }
 
                                     StyledText {
-                                        text: "No active pull requests"
+                                        text: root.tr("noPRs")
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.weight: Font.Medium
                                         color: Theme.surfaceVariantText
@@ -632,7 +642,7 @@ PluginComponent {
                                     }
 
                                     StyledText {
-                                        text: "Refreshing PRs..."
+                                        text: root.tr("refreshingPRs")
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.weight: Font.Medium
                                         color: Theme.surfaceVariantText
@@ -851,7 +861,7 @@ PluginComponent {
                                     }
 
                                     StyledText {
-                                        text: "Issues"
+                                        text: root.tr("issues")
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.weight: Font.Bold
                                         color: issueHeaderMa.containsMouse ? Theme.primary : Theme.surfaceText
@@ -902,7 +912,7 @@ PluginComponent {
                                     }
 
                                     StyledText {
-                                        text: "No active issues"
+                                        text: root.tr("noIssues")
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.weight: Font.Medium
                                         color: Theme.surfaceVariantText
@@ -932,7 +942,7 @@ PluginComponent {
                                     }
 
                                     StyledText {
-                                        text: "Refreshing Issues..."
+                                        text: root.tr("refreshingIssues")
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.weight: Font.Medium
                                         color: Theme.surfaceVariantText
