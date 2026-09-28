@@ -780,6 +780,7 @@ PluginComponent {
                                                             font.pixelSize: Theme.fontSizeSmall
                                                             color: isHovered ? Theme.primary : Theme.surfaceVariantText
                                                             Layout.fillWidth: true
+                                                            wrapMode: Text.NoWrap
                                                             elide: Text.ElideRight
                                                             Behavior on color { ColorAnimation { duration: 150 } }
                                                         }
@@ -1079,6 +1080,7 @@ PluginComponent {
                                                             font.pixelSize: Theme.fontSizeSmall
                                                             color: isHovered ? Theme.primary : Theme.surfaceVariantText
                                                             Layout.fillWidth: true
+                                                            wrapMode: Text.NoWrap
                                                             elide: Text.ElideRight
                                                             Behavior on color { ColorAnimation { duration: 150 } }
                                                         }
