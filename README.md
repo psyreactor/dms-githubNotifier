@@ -102,7 +102,7 @@ reloaded is discarded rather than applied to a torn-down widget.
 - [Lucas Mariani](https://github.com/psyreactor) — author
 - [rochacbruno](https://github.com/rochacbruno) — exclude archived repositories ([#5](https://github.com/psyreactor/dms-githubNotifier/pull/5))
 - [Thomas-Philippot](https://github.com/Thomas-Philippot) — header with user info and SVG icon ([#2](https://github.com/psyreactor/dms-githubNotifier/pull/2))
-- [bernardopg](https://github.com/bernardopg) — serialize refreshes and DMS 1.5 color fix ([#6](https://github.com/psyreactor/dms-githubNotifier/pull/6))
+- [bernardopg](https://github.com/bernardopg) — serialize refreshes and DMS 1.5 color fix ([#6](https://github.com/psyreactor/dms-githubNotifier/pull/6)); translations into 7 languages ([#16](https://github.com/psyreactor/dms-githubNotifier/pull/16))
 - [martian0x80](https://github.com/martian0x80) — fix broken vertical bar pill ([#9](https://github.com/psyreactor/dms-githubNotifier/pull/9))
 - [rdannenbring](https://github.com/rdannenbring) — fix widget hanging on "Checking..." in multi-bar setups ([#11](https://github.com/psyreactor/dms-githubNotifier/pull/11))
 - [JDKamalakar](https://github.com/JDKamalakar) — UI rework to match the official Phone Connect plugin: scrollable lists, header card, configurable time format ([#13](https://github.com/psyreactor/dms-githubNotifier/pull/13))
