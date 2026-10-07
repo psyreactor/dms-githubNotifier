@@ -23,7 +23,7 @@ PluginComponent {
     property bool showIssues: PluginService.loadPluginData("githubNotifier", "showIssues", true)
     property string timeFormat: PluginService.loadPluginData("githubNotifier", "timeFormat", "system")
     property string language: PluginService.loadPluginData("githubNotifier", "language", "auto")
-    readonly property string lang: L.resolve(language, I18n._rawLocale || Qt.locale().name)
+    readonly property string lang: L.resolve(language, SessionData.locale || Qt.locale().name)
 
     function tr(key, a, b) {
         return L.tr(root.lang, key, a, b);

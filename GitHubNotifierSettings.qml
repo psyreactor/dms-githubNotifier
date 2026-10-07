@@ -4,6 +4,7 @@ import QtQuick.Shapes
 import Quickshell
 import qs.Common
 import qs.Widgets
+import qs.DCommon.Widgets as DCommon
 import qs.Modules.Plugins
 import qs.Services
 import "./translations.js" as L
@@ -12,8 +13,8 @@ PluginSettings {
     id: root
     pluginId: "githubNotifier"
 
-    property string language: PluginService.loadPluginData("githubNotifier", "language", "auto")
-    readonly property string lang: L.resolve(language, I18n._rawLocale || Qt.locale().name)
+    property string language: "auto"
+    readonly property string lang: L.resolve(language, SessionData.locale || Qt.locale().name)
 
     function tr(key) {
         return L.tr(root.lang, key);
@@ -511,7 +512,7 @@ PluginSettings {
                         Layout.alignment: Qt.AlignVCenter
                     }
 
-                    DankDropdown {
+                    DCommon.DDropdown {
                         Layout.fillWidth: true
                         text: root.tr("languageLabel")
                         description: root.tr("languageDesc")
