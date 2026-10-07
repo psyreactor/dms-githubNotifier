@@ -16,6 +16,8 @@ Shows a compact badge in the DankBar with counts for open Pull Requests authored
   it completes
 - Optional filter by GitHub organization
 - Configurable refresh interval, time format, and what to count (PRs/issues)
+- Translated into English, Português (Brasil), Español, Français, 中文（简体）,
+  日本語 and 한국어; follows the DMS/system locale or a language picked in settings
 
 ## Installation
 
@@ -44,12 +46,15 @@ Then enable the plugin via DMS Settings → Plugins and add the `githubNotifier`
 - `Show Issues`: toggle to include/exclude open issues assigned to you.
 - `Time Format`: how the last-updated time is rendered in the popup header —
   system default, 12-hour or 24-hour.
+- `Language`: `Automatic (system)` follows the DMS/system locale (English as
+  fallback); or pick one of the supported languages explicitly.
 
 ## Files
 
 - `plugin.json` — plugin manifest
 - `GitHubNotifierWidget.qml` — main widget and popup implementation
 - `GitHubNotifierSettings.qml` — settings UI
+- `translations.js` — UI strings for every supported language
 - `README.md` — this file
 
 ## Permissions
@@ -97,7 +102,7 @@ reloaded is discarded rather than applied to a torn-down widget.
 - [Lucas Mariani](https://github.com/psyreactor) — author
 - [rochacbruno](https://github.com/rochacbruno) — exclude archived repositories ([#5](https://github.com/psyreactor/dms-githubNotifier/pull/5))
 - [Thomas-Philippot](https://github.com/Thomas-Philippot) — header with user info and SVG icon ([#2](https://github.com/psyreactor/dms-githubNotifier/pull/2))
-- [bernardopg](https://github.com/bernardopg) — serialize refreshes and DMS 1.5 color fix ([#6](https://github.com/psyreactor/dms-githubNotifier/pull/6))
+- [bernardopg](https://github.com/bernardopg) — serialize refreshes and DMS 1.5 color fix ([#6](https://github.com/psyreactor/dms-githubNotifier/pull/6)); translations into 7 languages ([#16](https://github.com/psyreactor/dms-githubNotifier/pull/16))
 - [martian0x80](https://github.com/martian0x80) — fix broken vertical bar pill ([#9](https://github.com/psyreactor/dms-githubNotifier/pull/9))
 - [rdannenbring](https://github.com/rdannenbring) — fix widget hanging on "Checking..." in multi-bar setups ([#11](https://github.com/psyreactor/dms-githubNotifier/pull/11))
 - [JDKamalakar](https://github.com/JDKamalakar) — UI rework to match the official Phone Connect plugin: scrollable lists, header card, configurable time format ([#13](https://github.com/psyreactor/dms-githubNotifier/pull/13))

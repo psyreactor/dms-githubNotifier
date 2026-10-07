@@ -4,12 +4,21 @@ import QtQuick.Shapes
 import Quickshell
 import qs.Common
 import qs.Widgets
+import qs.DCommon.Widgets as DCommon
 import qs.Modules.Plugins
 import qs.Services
+import "./translations.js" as L
 
 PluginSettings {
     id: root
     pluginId: "githubNotifier"
+
+    property string language: "auto"
+    readonly property string lang: L.resolve(language, SessionData.locale || Qt.locale().name)
+
+    function tr(key) {
+        return L.tr(root.lang, key);
+    }
 
     Column {
         id: mainSettingsCol
@@ -32,6 +41,7 @@ PluginSettings {
             showPRsToggle.loadValue();
             showIssuesToggle.loadValue();
             timeFormatSelector.loadValue();
+            root.language = mainSettingsCol.loadValue("language", "auto");
         }
 
         Component.onCompleted: loadValueInternal()
@@ -75,7 +85,7 @@ PluginSettings {
                             spacing: 2
 
                             StyledText {
-                                text: "GitHub CLI Executable Path"
+                                text: root.tr("ghLabel")
                                 font.pixelSize: Theme.fontSizeMedium
                                 font.weight: Font.Medium
                                 color: Theme.surfaceText
@@ -83,7 +93,7 @@ PluginSettings {
                             }
 
                             StyledText {
-                                text: "Path to gh executable (default: gh). Requires gh CLI authenticated."
+                                text: root.tr("ghDesc")
                                 font.pixelSize: Theme.fontSizeSmall
                                 color: Theme.surfaceVariantText
                                 Layout.fillWidth: true
@@ -95,7 +105,7 @@ PluginSettings {
                     DankTextField {
                         id: ghBinaryField
                         width: parent.width
-                        placeholderText: "Enter path or binary name (e.g. gh)"
+                        placeholderText: root.tr("ghPlaceholder")
 
                         function loadValue() {
                             text = mainSettingsCol.loadValue("ghBinary", "gh");
@@ -128,7 +138,7 @@ PluginSettings {
                             spacing: 2
 
                             StyledText {
-                                text: "Organization (Optional)"
+                                text: root.tr("orgLabel")
                                 font.pixelSize: Theme.fontSizeMedium
                                 font.weight: Font.Medium
                                 color: Theme.surfaceText
@@ -136,7 +146,7 @@ PluginSettings {
                             }
 
                             StyledText {
-                                text: "Filter pull requests and issues by organization. Leave empty for all repositories."
+                                text: root.tr("orgDesc")
                                 font.pixelSize: Theme.fontSizeSmall
                                 color: Theme.surfaceVariantText
                                 Layout.fillWidth: true
@@ -181,7 +191,7 @@ PluginSettings {
                             spacing: 2
 
                             StyledText {
-                                text: "Refresh Interval (Seconds)"
+                                text: root.tr("intervalLabel")
                                 font.pixelSize: Theme.fontSizeMedium
                                 font.weight: Font.Medium
                                 color: Theme.surfaceText
@@ -189,7 +199,7 @@ PluginSettings {
                             }
 
                             StyledText {
-                                text: "Frequency of GitHub data background updates in seconds (minimum: 15s)."
+                                text: root.tr("intervalDesc")
                                 font.pixelSize: Theme.fontSizeSmall
                                 color: Theme.surfaceVariantText
                                 Layout.fillWidth: true
@@ -254,7 +264,7 @@ PluginSettings {
                         spacing: 2
 
                         StyledText {
-                            text: "Show Pull Requests"
+                            text: root.tr("showPRsLabel")
                             font.pixelSize: Theme.fontSizeMedium
                             font.weight: Font.Medium
                             color: Theme.surfaceText
@@ -262,7 +272,7 @@ PluginSettings {
                         }
 
                         StyledText {
-                            text: "Display open pull requests authored by you."
+                            text: root.tr("showPRsDesc")
                             font.pixelSize: Theme.fontSizeSmall
                             color: Theme.surfaceVariantText
                             Layout.fillWidth: true
@@ -304,7 +314,7 @@ PluginSettings {
                         spacing: 2
 
                         StyledText {
-                            text: "Show Issues"
+                            text: root.tr("showIssuesLabel")
                             font.pixelSize: Theme.fontSizeMedium
                             font.weight: Font.Medium
                             color: Theme.surfaceText
@@ -312,7 +322,7 @@ PluginSettings {
                         }
 
                         StyledText {
-                            text: "Display open issues assigned to you."
+                            text: root.tr("showIssuesDesc")
                             font.pixelSize: Theme.fontSizeSmall
                             color: Theme.surfaceVariantText
                             Layout.fillWidth: true
@@ -366,7 +376,7 @@ PluginSettings {
                             spacing: 2
 
                             StyledText {
-                                text: "Time Format"
+                                text: root.tr("timeFormatLabel")
                                 font.pixelSize: Theme.fontSizeMedium
                                 font.weight: Font.Medium
                                 color: Theme.surfaceText
@@ -374,7 +384,7 @@ PluginSettings {
                             }
 
                             StyledText {
-                                text: "Choose time format for timestamps and update indicators."
+                                text: root.tr("timeFormatDesc")
                                 font.pixelSize: Theme.fontSizeSmall
                                 color: Theme.surfaceVariantText
                                 Layout.fillWidth: true
@@ -389,9 +399,9 @@ PluginSettings {
 
                         Repeater {
                             model: [
-                                { title: "System Default", key: "system", icon: "settings_suggest" },
-                                { title: "12-Hour", key: "12h", icon: "schedule" },
-                                { title: "24-Hour", key: "24h", icon: "alarm" }
+                                { title: root.tr("systemDefault"), key: "system", icon: "settings_suggest" },
+                                { title: root.tr("hour12"), key: "12h", icon: "schedule" },
+                                { title: root.tr("hour24"), key: "24h", icon: "alarm" }
                             ]
 
                             delegate: Item {
@@ -484,6 +494,36 @@ PluginSettings {
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+
+                // Language
+                RowLayout {
+                    width: parent.width
+                    spacing: Theme.spacingM
+
+                    readonly property var choices: [{ value: "auto", label: root.tr("languageAuto") }].concat(L.languages)
+
+                    DankIcon {
+                        name: "translate"
+                        size: 22
+                        color: Theme.primary
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+
+                    DCommon.DDropdown {
+                        Layout.fillWidth: true
+                        text: root.tr("languageLabel")
+                        description: root.tr("languageDesc")
+                        options: parent.choices.map(c => c.label)
+                        currentValue: (parent.choices.find(c => c.value === root.language) || parent.choices[0]).label
+                        onValueChanged: label => {
+                            const choice = parent.choices.find(c => c.label === label);
+                            if (!choice)
+                                return;
+                            root.language = choice.value;
+                            mainSettingsCol.saveValue("language", choice.value);
                         }
                     }
                 }
