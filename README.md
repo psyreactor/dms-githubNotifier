@@ -16,6 +16,8 @@ Shows a compact badge in the DankBar with counts for open Pull Requests authored
   it completes
 - Optional filter by GitHub organization
 - Configurable refresh interval, time format, and what to count (PRs/issues)
+- Translated into English, Português (Brasil), Español, Français, 中文（简体）,
+  日本語 and 한국어; follows the DMS/system locale or a language picked in settings
 
 ## Installation
 
@@ -44,12 +46,15 @@ Then enable the plugin via DMS Settings → Plugins and add the `githubNotifier`
 - `Show Issues`: toggle to include/exclude open issues assigned to you.
 - `Time Format`: how the last-updated time is rendered in the popup header —
   system default, 12-hour or 24-hour.
+- `Language`: `Automatic (system)` follows the DMS/system locale (English as
+  fallback); or pick one of the supported languages explicitly.
 
 ## Files
 
 - `plugin.json` — plugin manifest
 - `GitHubNotifierWidget.qml` — main widget and popup implementation
 - `GitHubNotifierSettings.qml` — settings UI
+- `translations.js` — UI strings for every supported language
 - `README.md` — this file
 
 ## Permissions
